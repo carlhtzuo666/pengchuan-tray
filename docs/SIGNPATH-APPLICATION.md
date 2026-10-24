@@ -1,7 +1,8 @@
 # SignPath Foundation 申请材料与接入说明
 
-本文件用于申请 [SignPath Foundation](https://signpath.org/foundation) 的**开源项目免费代码签名**，并记录接入步骤。
+本文件用于申请 [SignPath Foundation](https://signpath.org) 的**开源项目免费代码签名**，并记录接入步骤。
 
+> 申请入口：<https://signpath.org/apply>（官方资格条件：<https://signpath.org/terms.html>）  
 > 状态：待申请（2026-10）。审核通过后按「接入步骤」配置 GitHub Secrets/Variables 即可自动签名。
 
 ---
@@ -14,7 +15,11 @@
 - [x] 公开 CI 可复现构建（`.github/workflows/build.yml`）
 - [x] 有 README、安全策略、贡献指南
 - [x] 构建产物不提交仓库（`.gitignore`）
+- [x] README 含 **Code signing policy** 章节（SignPath 要求首页必须有）
+- [x] 隐私政策 `PRIVACY.md` 并在 README 链接
+- [x] exe 带一致的产品名/版本元数据（`PengchuanTray.csproj`）
 - [ ] GitHub 仓库创建并推送
+- [ ] **已发布至少一个 GitHub Release**（SignPath 要求项目“已发布”）
 - [ ] SignPath 账号注册并提交申请
 
 ---
@@ -25,7 +30,7 @@
 
 **Project name:** PengchuanTray (Pengchuan Share Windows tray helper)
 
-**Repository:** https://github.com/<your-account>/pengchuan-tray
+**Repository:** https://github.com/carlhtzuo666/pengchuan-tray
 
 **License:** MIT
 
@@ -47,7 +52,7 @@ None. No analytics, telemetry, crash reporting, advertising, or remote logging. 
 
 **项目名：** PengchuanTray（碰传share Windows 托盘助手）
 
-**仓库：** https://github.com/<your-account>/pengchuan-tray
+**仓库：** https://github.com/carlhtzuo666/pengchuan-tray
 
 **许可证：** MIT
 
@@ -143,3 +148,4 @@ A：可改用 Certum Open Source Code Signing（约 €30–80/年）或 Azure T
 
 **Q：签名后还需要 dotnet 启动器吗？**  
 A：不需要；启动器仅作为**未签名/未上架**场景的兜底。
+

@@ -17,7 +17,16 @@
     <RootNamespace>PengchuanTray</RootNamespace>
     <AssemblyName>PengchuanTray</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- 签名/版本元数据：SignPath 要求产物带一致的产品名与版本属性 -->
+    <Product>PengchuanTray</Product>
+    <AssemblyTitle>PengchuanTray</AssemblyTitle>
+    <Company>ailinkfree</Company>
     <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+    <InformationalVersion>0.1.0</InformationalVersion>
+
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>

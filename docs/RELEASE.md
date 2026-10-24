@@ -22,7 +22,7 @@ git init -b main
 git add .
 git status                 # 确认没有 bin/obj/release/dist
 git commit -m "chore: initial open-source release (MIT)"
-git remote add origin https://github.com/<your-account>/pengchuan-tray.git
+git remote add origin https://github.com/carlhtzuo666/pengchuan-tray.git
 git push -u origin main
 ```
 
@@ -69,3 +69,4 @@ git push origin v0.2.1
 - `0.x.y`：开源助手阶段；
 - 每次发布打 tag `vX.Y.Z`，与 `PengchuanTray.csproj` 的 `<Version>` 保持一致；
 - 预发布可用 `vX.Y.Z-beta.1`（工作流目前对所有 `v*` tag 生效，如需区分请调整 `on.push.tags`）。
+

@@ -84,6 +84,18 @@ dotnet PengchuanTray.dll
 - 只在局域网内访问手机服务，令牌不写入日志；
 - 云端取件页仅在用户主动点击时打开。
 
+完整隐私说明见 [PRIVACY.md](PRIVACY.md)。
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+- Committers and reviewers: [@carlhtzuo666](https://github.com/carlhtzuo666)
+- Approvers: [@carlhtzuo666](https://github.com/carlhtzuo666)
+- Privacy policy: [PRIVACY.md](PRIVACY.md)
+
+签名范围为 GitHub Actions 公开构建产生的 `PengchuanTray.exe`；每个 release 需由 Approver 手动批准后才提交签名。
+
 ## 许可证
 
 [MIT](LICENSE)
