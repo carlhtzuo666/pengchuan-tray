@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using QRCoder;
 
 namespace PengchuanTray;
 
@@ -28,10 +29,16 @@ public sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _autoOpenItem;
     private readonly ToolStripMenuItem _autoDownloadItem;
     private readonly ToolStripMenuItem _startupItem;
+    private readonly ToolStripMenuItem _qrStickerItem;
+    private readonly ToolStripMenuItem _qrListenItem;
+    private readonly QrOfferClient _qrClient = new();
 
     private string? _openedToken;
     private bool _receiving;
     private bool _exiting;
+    private bool _qrChecking;
+    private readonly HashSet<string> _opening = new();
+    private readonly object _openGate = new();
 
     public TrayContext()
     {
@@ -50,12 +57,19 @@ public sealed class TrayContext : ApplicationContext
         {
             Checked = IsStartupEnabled()
         };
+        _qrStickerItem = new ToolStripMenuItem("显示/打印扫码贴纸", null, (_, _) => ShowQrSticker());
+        _qrListenItem = new ToolStripMenuItem("监听扫码贴纸", null, (_, _) => ToggleQrListen())
+        {
+            Checked = _settings.QrListenEnabled
+        };
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_openLanItem);
         menu.Items.Add(_receiveItem);
+        menu.Items.Add(_qrStickerItem);
+        menu.Items.Add(_qrListenItem);
         menu.Items.Add(new ToolStripMenuItem("打开云端取件页", null, (_, _) => OpenUrl(CloudPickupUrl)));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_autoOpenItem);
@@ -75,12 +89,19 @@ public sealed class TrayContext : ApplicationContext
 
         _discovery.Changed += OnPhoneChanged;
         _discovery.Start();
+        // 首次运行/升级后自动注册开机自启，用户无需手动勾选
+        EnsureDefaultStartup();
 
         // 启动提示：Windows 11 默认把新图标收进托盘溢出区，提示用户去哪里找
+        var startupTip = IsStartupEnabled() ? "已默认开启开机自启。" : string.Empty;
         Notify("碰传share 托盘助手已启动",
-            "图标在右下角托盘（看不到请点 ^ 展开）。右键可设置开机自启；手机就绪后会自动接收文件。");
+            $"图标在右下角托盘（看不到请点 ^ 展开）。{startupTip}手机就绪后会自动打开局域网页并接收文件。");
 
-        _ticker.Tick += (_, _) => RefreshStatus();
+        _ticker.Tick += (_, _) =>
+        {
+            RefreshStatus();
+            _ = CheckQrOfferAsync();
+        };
         _ticker.Start();
         RefreshStatus();
     }
@@ -97,15 +118,62 @@ public sealed class TrayContext : ApplicationContext
             return;
         }
 
-        Notify("手机已就绪", $"局域网直连 {phone.Display}（不消耗云流量）");
-        if (_settings.AutoOpenBrowser && _openedToken != phone.Token)
+        Log($"发现手机 {phone.Display} token={phone.Token.Substring(0, Math.Min(4, phone.Token.Length))}");
+        // mDNS 可能拿到旧 token 或手机服务刚起还没就绪：先 ping 通再打开，避免失败页面
+        _ = OpenWhenReadyAsync(phone);
+    }
+
+    /// <summary>
+    /// 打开前确认局域网服务真的可用（HTTP 200）；失败时短间隔重试，
+    /// 覆盖「手机刚起服务 / 旧 token 还没被新记录替换」的窗口。
+    /// </summary>
+    private async Task OpenWhenReadyAsync(DiscoveredPhone phone)
+    {
+        // 同一个 token 可能对应多个候选 IP（虚拟网卡/多网卡会收到不同来源地址），
+        // 必须按 host+port+token 去重，否则正确的 192.168.x.x 会被错误候选挡住。
+        var openKey = $"{phone.Host}:{phone.Port}:{phone.Token}";
+        lock (_openGate)
         {
-            _openedToken = phone.Token;
-            OpenUrl(phone.Url);
+            if (!_opening.Add(openKey))
+            {
+                return;
+            }
         }
-        if (_settings.AutoDownloadOutbox && !_receiving)
+        try
         {
-            _ = ReceiveAsync();
+            for (var attempt = 0; attempt < 6; attempt++)
+            {
+                if (await _phone.PingAsync(phone, timeoutMs: 600))
+                {
+                    Log($"ping 成功 {phone.Display}");
+                    Notify("手机已就绪", $"局域网直连 {phone.Display}（不消耗云流量）");
+                    if (_settings.AutoOpenBrowser && _openedToken != phone.Token)
+                    {
+                        _openedToken = phone.Token;
+                        Log("打开局域网页");
+                        OpenUrl(phone.Url);
+                    }
+                    if (_settings.AutoDownloadOutbox && !_receiving)
+                    {
+                        _ = ReceiveAsync();
+                    }
+                    return;
+                }
+                await Task.Delay(120);
+            }
+            // 同一 token 的正确 IP 可能已经打开成功；别让错误候选的失败提示干扰用户
+            if (_openedToken != phone.Token)
+            {
+                Log($"ping 失败 {phone.Display}");
+                Notify("局域网暂不可达", $"手机 {phone.Display} 未响应，请保持待上传页并确认同一 Wi-Fi");
+            }
+        }
+        finally
+        {
+            lock (_openGate)
+            {
+                _opening.Remove(openKey);
+            }
         }
     }
 
@@ -208,7 +276,92 @@ public sealed class TrayContext : ApplicationContext
         _settings.Save();
     }
 
-    private void ToggleStartup()
+    /// <summary>生成并打开本机扫码贴纸二维码（可直接打印贴在电脑上）</summary>
+    private void ShowQrSticker()
+    {
+        try
+        {
+            var id = EnsureQrId();
+            var pageUrl = "https://share.ailinkfree.com/s/?id=" + Uri.EscapeDataString(id);
+            using var generator = new QRCodeGenerator();
+            using var qrData = generator.CreateQrCode(pageUrl, QRCodeGenerator.ECCLevel.Q);
+            var png = new PngByteQRCode(qrData);
+            var bytes = png.GetGraphic(20);
+            var path = Path.Combine(Path.GetTempPath(), "pengchuan-qr-sticker.png");
+            File.WriteAllBytes(path, bytes);
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            Notify("扫码贴纸已生成", $"打印后贴在电脑上；手机系统相机扫码即可连接。\nID：{id}");
+        }
+        catch (Exception ex)
+        {
+            Notify("生成扫码贴纸失败", ex.Message);
+        }
+    }
+
+    private void ToggleQrListen()
+    {
+        _settings.QrListenEnabled = !_settings.QrListenEnabled;
+        _qrListenItem.Checked = _settings.QrListenEnabled;
+        _settings.Save();
+        Notify("碰传share", _settings.QrListenEnabled ? "已开启扫码贴纸监听" : "已关闭扫码贴纸监听");
+    }
+
+    /// <summary>贴纸 ID 首次使用时生成并持久化：pc_&lt;机器码&gt;_&lt;随机密钥&gt;</summary>
+    private string EnsureQrId()
+    {
+        if (!string.IsNullOrWhiteSpace(_settings.PcQrId))
+        {
+            return _settings.PcQrId;
+        }
+        var random = Guid.NewGuid().ToString("N");
+        _settings.PcQrId = $"pc_{random[..8]}_{random[8..24]}";
+        _settings.Save();
+        return _settings.PcQrId;
+    }
+
+    /// <summary>托盘 ticker 里顺带检查一次扫码会合（不额外新增定时器）</summary>
+    private async Task CheckQrOfferAsync()
+    {
+        if (!_settings.QrListenEnabled || _qrChecking || string.IsNullOrWhiteSpace(_settings.PcQrId))
+        {
+            return;
+        }
+        _qrChecking = true;
+        try
+        {
+            var url = await _qrClient.TakeAsync(_settings.PcQrId);
+            if (!string.IsNullOrWhiteSpace(url))
+            {
+                OpenUrl(url);
+                Notify("扫码连接", "已打开手机的局域网地址");
+            }
+        }
+        catch
+        {
+            // 网络抖动不影响托盘主流程，下个 tick 再试
+        }
+        finally
+        {
+            _qrChecking = false;
+        }
+    }
+
+    /// <summary>
+    /// 首次运行/从旧版本升级：自动写入开机自启，用户无需手动操作。
+    /// 只执行一次；之后用户在菜单里取消，不会在下次启动时强行恢复。
+    /// </summary>
+    private void EnsureDefaultStartup()
+    {
+        if (!_settings.StartupDefaultApplied && SetStartup(true))
+        {
+            _settings.StartupDefaultApplied = true;
+            _settings.Save();
+        }
+        _startupItem.Checked = IsStartupEnabled();
+    }
+
+    /// <summary>写入/删除 HKCU Run；成功返回 true（失败不抛异常）</summary>
+    private static bool SetStartup(bool enabled)
     {
         try
         {
@@ -216,24 +369,35 @@ public sealed class TrayContext : ApplicationContext
                 @"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
             if (key is null)
             {
-                Notify("设置失败", "无法打开开机启动注册表项");
-                return;
+                return false;
             }
-            if (IsStartupEnabled())
-            {
-                key.DeleteValue("PengchuanTray", throwOnMissingValue: false);
-            }
-            else
+            if (enabled)
             {
                 key.SetValue("PengchuanTray", StartupCommand());
             }
-            _startupItem.Checked = IsStartupEnabled();
-            Notify("碰传share", _startupItem.Checked ? "已设置为开机自动启动" : "已取消开机自动启动");
+            else
+            {
+                key.DeleteValue("PengchuanTray", throwOnMissingValue: false);
+            }
+            return true;
         }
-        catch (Exception ex)
+        catch
         {
-            Notify("设置失败", ex.Message);
+            return false;
         }
+    }
+
+    private void ToggleStartup()
+    {
+        if (!SetStartup(!IsStartupEnabled()))
+        {
+            Notify("设置失败", "无法修改开机启动注册表项");
+            return;
+        }
+        _settings.StartupDefaultApplied = true;
+        _settings.Save();
+        _startupItem.Checked = IsStartupEnabled();
+        Notify("碰传share", _startupItem.Checked ? "已设置为开机自动启动" : "已取消开机自动启动");
     }
 
     private static bool IsStartupEnabled()
@@ -285,6 +449,21 @@ public sealed class TrayContext : ApplicationContext
         catch (Exception ex)
         {
             Notify("打开文件夹失败", ex.Message);
+        }
+    }
+
+    /// <summary>轻量诊断日志：只记时间与主机，不写令牌/URL（便于排查打开失败与延迟）</summary>
+    private static void Log(string message)
+    {
+        try
+        {
+            File.AppendAllText(
+                Path.Combine(AppContext.BaseDirectory, "tray.log"),
+                $"{DateTime.Now:HH:mm:ss.fff} {message}{Environment.NewLine}");
+        }
+        catch
+        {
+            // 日志失败不影响主流程
         }
     }
 

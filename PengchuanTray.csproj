@@ -22,10 +22,10 @@
     <Product>PengchuanTray</Product>
     <AssemblyTitle>PengchuanTray</AssemblyTitle>
     <Company>ailinkfree</Company>
-    <Version>0.1.0</Version>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.0</FileVersion>
-    <InformationalVersion>0.1.0</InformationalVersion>
+    <Version>0.1.2</Version>
+    <AssemblyVersion>0.1.2.0</AssemblyVersion>
+    <FileVersion>0.1.2.0</FileVersion>
+    <InformationalVersion>0.1.2</InformationalVersion>
 
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishSingleFile>true</PublishSingleFile>
@@ -36,6 +36,10 @@
 
   <ItemGroup>
     <!-- 无第三方依赖：mDNS 用自建 MdnsClient（Makaretu.Dns.Multicast 在 .NET 10 上收不到应答，见 MdnsClient.cs 注释） -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="QRCoder" Version="1.6.0" />
   </ItemGroup>
 
 </Project>

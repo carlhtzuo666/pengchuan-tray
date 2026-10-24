@@ -17,11 +17,23 @@ public sealed class AppSettings
     /// <summary>设置版本：用于老版本配置的一次性迁移</summary>
     public int SettingsVersion { get; set; }
 
-    /// <summary>发现手机后自动用默认浏览器打开局域网页（默认关闭：优先自动收文件，零输入）</summary>
-    public bool AutoOpenBrowser { get; set; }
+    /// <summary>本机扫码贴纸 ID（pc_&lt;机器码&gt;_&lt;随机密钥&gt;，首次使用时生成）</summary>
+    public string PcQrId { get; set; } = string.Empty;
+
+    /// <summary>是否在托盘运行期间监听扫码贴纸（默认开启；关闭后不发起任何轮询）</summary>
+    public bool QrListenEnabled { get; set; } = true;
+
+    /// <summary>发现手机后自动用默认浏览器打开局域网页（默认开启：碰标签后零输入直达）</summary>
+    public bool AutoOpenBrowser { get; set; } = true;
 
     /// <summary>发现手机后自动把「发件箱」文件下载到 DownloadFolder（默认开启）</summary>
     public bool AutoDownloadOutbox { get; set; } = true;
+
+    /// <summary>
+    /// 是否已经应用过「默认开机自启」。
+    /// 首次运行/从旧版本升级时自动写入 HKCU Run；之后用户手动取消则不再强行恢复。
+    /// </summary>
+    public bool StartupDefaultApplied { get; set; }
 
     /// <summary>下载目录；空则用桌面\碰传share</summary>
     public string DownloadFolder { get; set; } = string.Empty;
@@ -72,6 +84,15 @@ public sealed class AppSettings
                         loaded.AutoOpenBrowser = false;
                         loaded.Save();
                     }
+                    // v3 迁移：默认开机自启 + 发现手机自动打开网页，用户无需任何手动设置
+                    if (loaded.SettingsVersion < 3)
+                    {
+                        loaded.SettingsVersion = 3;
+                        loaded.AutoOpenBrowser = true;
+                        loaded.AutoDownloadOutbox = true;
+                        loaded.StartupDefaultApplied = false;
+                        loaded.Save();
+                    }
                     return loaded;
                 }
             }
@@ -80,7 +101,8 @@ public sealed class AppSettings
         {
             // 配置损坏时用默认值，不阻塞启动
         }
-        return new AppSettings();
+        // 首次运行：直接使用 v3 默认值（自动打开网页 + 自动收文件 + 首次启动时注册开机自启）
+        return new AppSettings { SettingsVersion = 3 };
     }
 
     public void Save()
