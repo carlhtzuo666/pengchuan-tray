@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    碰传share · Windows 托盘助手（T1，绿色单文件）
+    目标：不装接收端服务、不监听任何端口；只在托盘点一下/或检测到手机就绪时：
+      · 自动用浏览器打开手机的局域网页（局域网直连，零云成本）
+      · 或直接把手机「发件箱」里的文件下载到桌面
+    找不到手机（不同网络）时打开账号取件页 https://share.ailinkfree.com
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>PengchuanTray</RootNamespace>
+    <AssemblyName>PengchuanTray</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>0.1.0</Version>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 无第三方依赖：mDNS 用自建 MdnsClient（Makaretu.Dns.Multicast 在 .NET 10 上收不到应答，见 MdnsClient.cs 注释） -->
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,107 @@
+name: build
+
+# 触发：main 分支、PR、版本 tag、手动
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build-and-sign:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore PengchuanTray.csproj
+
+      # 框架依赖单文件：体积小，需要目标机安装 .NET 10 Desktop Runtime
+      - name: Publish (framework-dependent, single file)
+        run: >
+          dotnet publish PengchuanTray.csproj -c Release -r win-x64
+          --self-contained false -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true -o dist/framework
+
+      # 自包含单文件：目标机零依赖，体积较大（待签名的主要产物）
+      - name: Publish (self-contained, single file)
+        run: >
+          dotnet publish PengchuanTray.csproj -c Release -r win-x64
+          --self-contained true -p:PublishSingleFile=true
+          -p:EnableCompressionInSingleFile=true -o dist/self-contained
+
+      # 把 dotnet 启动器随框架依赖版一起发布（Smart App Control 兜底）
+      - name: Copy dotnet launcher
+        shell: pwsh
+        run: Copy-Item scripts/start-tray-dotnet.cmd dist/framework/ -Force
+
+      - name: Upload unsigned framework build
+        id: upload-framework
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-framework
+          path: dist/framework/**
+
+      - name: Upload unsigned self-contained exe
+        id: upload-self-contained
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-self-contained
+          path: dist/self-contained/PengchuanTray.exe
+
+      # ------------------------------------------------------------------
+      # SignPath Foundation 开源签名（审核通过后启用）
+      #
+      # 启用前需要在仓库配置：
+      #   Secret:    SIGNPATH_API_TOKEN
+      #   Variables: SIGNPATH_ORGANIZATION_ID
+      #              SIGNPATH_PROJECT_SLUG
+      #              SIGNPATH_SIGNING_POLICY_SLUG
+      #              SIGNPATH_ARTIFACT_CONFIGURATION_SLUG
+      #
+      # 说明：
+      #   · 只有打 v* tag 且配置了 SIGNPATH_PROJECT_SLUG 时才执行；
+      #   · artifact-configuration 需在 SignPath 控制台创建，指定文件名
+      #     PengchuanTray.exe；
+      #   · action 版本与参数以 SignPath 官方文档为准，升级时请核对。
+      # ------------------------------------------------------------------
+      - name: Sign with SignPath Foundation
+        if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_PROJECT_SLUG != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-self-contained.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Upload signed exe
+        if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_PROJECT_SLUG != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-self-contained
+          path: signed/PengchuanTray.exe
+
+      # 只有签名成功的 tag 构建才创建 Release
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_PROJECT_SLUG != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            signed/PengchuanTray.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true
