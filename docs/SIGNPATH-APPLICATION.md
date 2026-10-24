@@ -195,3 +195,16 @@ No download statistics or third-party media coverage yet; the full source, build
 ```
 
 > 说明：SignPath 对可执行程序会看“可验证的声誉”。新项目可能被要求积累下载量/社区讨论后再申请；若被拒，可先积累 GitHub star/Release 下载量，或改用 Certum 开源证书。
+
+---
+
+## 七、已发布链接（补充给 SignPath）
+
+- GitHub 仓库：https://github.com/carlhtzuo666/pengchuan-tray
+- 首个 Release：https://github.com/carlhtzuo666/pengchuan-tray/releases/tag/v0.1.0
+- 项目介绍博客（GitHub Pages）：https://carlhtzuo666.github.io/pengchuan-tray/blog/2026-10-24-introducing-pengchuantray.html
+- 项目主页（GitHub Pages）：https://carlhtzuo666.github.io/pengchuan-tray/
+- 使用反馈 Issue：https://github.com/carlhtzuo666/pengchuan-tray/issues/1
+- 公开 CI：https://github.com/carlhtzuo666/pengchuan-tray/actions
+
+> 如果 SignPath 需要补充声誉材料，可在回复邮件中附上以上链接，并说明项目会持续在官网/社交平台发布更新。

@@ -98,8 +98,8 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 ## 社区与反馈
 
-- 项目介绍：[docs/blog/2026-10-24-introducing-pengchuantray.md](docs/blog/2026-10-24-introducing-pengchuantray.md)
-- 问题反馈：[GitHub Issues](https://github.com/carlhtzuo666/pengchuan-tray/issues)
+- 项目介绍（博客）：[carlhtzuo666.github.io/pengchuan-tray/blog/2026-10-24-introducing-pengchuantray.html](https://carlhtzuo666.github.io/pengchuan-tray/blog/2026-10-24-introducing-pengchuantray.html)
+- 问题反馈：[GitHub Issues](https://github.com/carlhtzuo666/pengchuan-tray/issues)、[使用反馈 #1](https://github.com/carlhtzuo666/pengchuan-tray/issues/1)
 - 使用反馈模板：新建 Issue 时选择「功能建议 / 使用反馈」
 
 ## 许可证
