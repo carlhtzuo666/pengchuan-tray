@@ -149,3 +149,49 @@ A：可改用 Certum Open Source Code Signing（约 €30–80/年）或 Azure T
 **Q：签名后还需要 dotnet 启动器吗？**  
 A：不需要；启动器仅作为**未签名/未上架**场景的兜底。
 
+---
+
+## 六、申请表逐项填写（2026-10 实测字段）
+
+申请页：<https://signpath.org/apply>（HubSpot 表单，含 reCAPTCHA）
+
+| 字段 | 建议填写 |
+|---|---|
+| Project Name* | `PengchuanTray` |
+| Repository URL* | `https://github.com/carlhtzuo666/pengchuan-tray` |
+| Homepage URL* | `https://github.com/carlhtzuo666/pengchuan-tray` |
+| Download URL | `https://github.com/carlhtzuo666/pengchuan-tray/releases/latest`（该 Release 说明已注明使用 SignPath Foundation 签名） |
+| Privacy Policy URL | `https://github.com/carlhtzuo666/pengchuan-tray/blob/main/PRIVACY.md` |
+| Wikipedia URL (optional) | 留空 |
+| Tagline* | `A lightweight Windows tray helper that discovers your phone over mDNS and transfers files on the local network.` |
+| Category* | `Productivity`（文件传输/效率工具；备选 `Developer Tools`） |
+| Description* | 见下方英文段落 |
+| Reputation* | 见下方英文段落；如暂无下载量，如实说明“新项目、首次发布 2026-10-24”，并附仓库/Release/CI 链接 |
+| Maintainer Type | 公司/商业背景选 `For-profit company or corporate-backed project`；个人维护选 `Individual maintainer(s)`（如实选择） |
+| Build System* | `GitHub Actions` |
+| First Name* / Last Name* | 你的姓名（用于创建 SignPath 账号） |
+| Email* | 你的邮箱（接收审核通知） |
+| Company Name | 公司名（个人可留空） |
+| Primary Discovery Channel* | 如实选择；若通过 AI 助手/搜索得知可选 `AI / LLM tools` 或 `Organic search` |
+| Please specify the exact source | 例：`Recommended by an AI coding assistant after searching for open-source code signing options` |
+| Code of Conduct 勾选* | 必须勾选（同意证书以 SignPath Foundation 名义签发） |
+| 接收营销邮件 | 可选，建议不勾选 |
+| 数据处理同意* | 必须勾选（否则无法提交） |
+
+### Description 可直接粘贴（英文）
+
+```
+PengchuanTray is a small open-source Windows tray utility for local-network file transfer with the Pengchuan Share mobile app. After the user taps an NFC tag with their phone, the phone starts a temporary HTTP service on the same Wi-Fi network. PengchuanTray discovers the phone via mDNS (_nfcshare._tcp), then either opens the phone's LAN web page in the default browser or downloads the phone's outbox files to the user's Desktop. It does not install a service, does not listen on any port, and contains no telemetry, ads, or data collection. The source is released under the MIT license to allow community review and redistribution.
+```
+
+### Reputation 可直接粘贴（英文，如实版）
+
+```
+New open-source project, first public release on 2026-10-24.
+- Source repository: https://github.com/carlhtzuo666/pengchuan-tray
+- Release: https://github.com/carlhtzuo666/pengchuan-tray/releases/tag/v0.1.0
+- Public CI build: https://github.com/carlhtzuo666/pengchuan-tray/actions
+No download statistics or third-party media coverage yet; the full source, build workflow and release artifacts are public for verification.
+```
+
+> 说明：SignPath 对可执行程序会看“可验证的声誉”。新项目可能被要求积累下载量/社区讨论后再申请；若被拒，可先积累 GitHub star/Release 下载量，或改用 Certum 开源证书。
