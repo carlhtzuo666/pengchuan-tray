@@ -96,6 +96,12 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 签名范围为 GitHub Actions 公开构建产生的 `PengchuanTray.exe`；每个 release 需由 Approver 手动批准后才提交签名。
 
+## 社区与反馈
+
+- 项目介绍：[docs/blog/2026-10-24-introducing-pengchuantray.md](docs/blog/2026-10-24-introducing-pengchuantray.md)
+- 问题反馈：[GitHub Issues](https://github.com/carlhtzuo666/pengchuan-tray/issues)
+- 使用反馈模板：新建 Issue 时选择「功能建议 / 使用反馈」
+
 ## 许可证
 
 [MIT](LICENSE)

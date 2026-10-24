@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用文档
+    url: https://github.com/carlhtzuo666/pengchuan-tray#readme
+    about: 构建、使用、Smart App Control 说明
+  - name: 隐私政策
+    url: https://github.com/carlhtzuo666/pengchuan-tray/blob/main/PRIVACY.md
+    about: 数据与网络访问说明
