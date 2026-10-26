@@ -29,7 +29,6 @@ public sealed class PhoneDiscovery : IDisposable
         public int Port;
         public string Token = string.Empty;
         public string? Address;
-        public DateTime LastQueryUtc;
         public DateTime LastSeenUtc;
     }
 
@@ -94,20 +93,14 @@ public sealed class PhoneDiscovery : IDisposable
         while (!ct.IsCancellationRequested)
         {
             Rescan();
-            // 已发现实例但缺字段的，补发 SRV/TXT/A 查询
+            // 已发现实例但缺字段的，立刻补发 SRV/TXT 查询（不再等 3 秒）
             List<string> pending;
             lock (_gate)
             {
-                var now = DateTime.UtcNow;
                 pending = _instances
                     .Where(kv => kv.Value.Address is null || kv.Value.Port == 0 || kv.Value.Token.Length == 0)
-                    .Where(kv => now - kv.Value.LastQueryUtc > TimeSpan.FromSeconds(3))
                     .Select(kv => kv.Key)
                     .ToList();
-                foreach (var name in pending)
-                {
-                    _instances[name].LastQueryUtc = now;
-                }
             }
             foreach (var name in pending)
             {
@@ -116,7 +109,8 @@ public sealed class PhoneDiscovery : IDisposable
             }
             try
             {
-                await Task.Delay(3000, ct);
+                // 1 秒一轮：发现要快，mDNS 报文很小，不会造成明显负担
+                await Task.Delay(1000, ct);
             }
             catch (OperationCanceledException)
             {
@@ -127,6 +121,7 @@ public sealed class PhoneDiscovery : IDisposable
 
     private void OnRecordsReceived(IReadOnlyList<MdnsRecord> records)
     {
+        var queries = new List<(string Name, ushort Type)>();
         lock (_gate)
         {
             foreach (var record in records)
@@ -142,16 +137,33 @@ public sealed class PhoneDiscovery : IDisposable
                     }
                     if (!_instances.ContainsKey(instance))
                     {
-                        _instances[instance] = new InstanceState { LastQueryUtc = DateTime.MinValue };
+                        _instances[instance] = new InstanceState();
                         _ownDiagnostics.Add($"{DateTime.Now:HH:mm:ss.fff} 发现实例 {instance}");
+                        // 新实例：立刻补 SRV/TXT，避免等下一轮 1 秒
+                        queries.Add((instance, MdnsClient.TypeSrv));
+                        queries.Add((instance, MdnsClient.TypeTxt));
                     }
-                    _instances[instance].LastSeenUtc = DateTime.UtcNow;
+                    var ptrState = _instances[instance];
+                    ptrState.LastSeenUtc = DateTime.UtcNow;
+                    // mDNS 报文来源就是手机 IP：不必再等 A 记录往返
+                    if (ptrState.Address is null && record.SourceAddress is not null)
+                    {
+                        ptrState.Address = record.SourceAddress;
+                    }
                 }
                 else if (record.Type == MdnsClient.TypeSrv && _instances.TryGetValue(record.Name, out var srvState))
                 {
                     srvState.Port = record.Port;
                     srvState.Target = record.Target;
                     srvState.LastSeenUtc = DateTime.UtcNow;
+                    if (srvState.Address is null && record.SourceAddress is not null)
+                    {
+                        srvState.Address = record.SourceAddress;
+                    }
+                    if (srvState.Address is null && !string.IsNullOrEmpty(record.Target))
+                    {
+                        queries.Add((record.Target!, MdnsClient.TypeA));
+                    }
                 }
                 else if (record.Type == MdnsClient.TypeTxt && _instances.TryGetValue(record.Name, out var txtState))
                 {
@@ -161,6 +173,10 @@ public sealed class PhoneDiscovery : IDisposable
                         txtState.Token = pcId!["pcId=".Length..];
                     }
                     txtState.LastSeenUtc = DateTime.UtcNow;
+                    if (txtState.Address is null && record.SourceAddress is not null)
+                    {
+                        txtState.Address = record.SourceAddress;
+                    }
                 }
                 else if ((record.Type == MdnsClient.TypeA || record.Type == MdnsClient.TypeAaaa) &&
                          !string.IsNullOrEmpty(record.Address))
@@ -178,20 +194,78 @@ public sealed class PhoneDiscovery : IDisposable
                 }
             }
 
+            // 清理 15 秒没再出现的实例：手机重启后旧 token 不能抢先被打开
+            var cutoff = DateTime.UtcNow.AddSeconds(-15);
+            var stale = _instances
+                .Where(kv => kv.Value.LastSeenUtc < cutoff)
+                .Select(kv => kv.Key)
+                .ToList();
+            foreach (var name in stale)
+            {
+                _instances.Remove(name);
+                _ownDiagnostics.Add($"{DateTime.Now:HH:mm:ss.fff} 过期实例 {name}");
+            }
+
+            // 同一 IP:port 只保留最新的 mDNS 实例：
+            // 手机重启/页面重开会换 token，旧实例若还缓存着，会让托盘在两个 token 间反复切换。
+            var keepByEndpoint = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var duplicates = new List<string>();
             foreach (var kv in _instances)
             {
                 if (kv.Value.Address is null || kv.Value.Port == 0)
                 {
                     continue;
                 }
-                var token = kv.Value.Token.Length > 0
-                    ? kv.Value.Token
-                    : kv.Key.Split('.')[0][InstancePrefix.Length..];
-                var phone = new DiscoveredPhone(kv.Value.Address!, kv.Value.Port, token,
-                    $"http://{kv.Value.Address}:{kv.Value.Port}/?t={Uri.EscapeDataString(token)}");
-                PublishLocked(phone);
-                return;
+                var endpoint = $"{kv.Value.Address}:{kv.Value.Port}";
+                if (!keepByEndpoint.TryGetValue(endpoint, out var keep))
+                {
+                    keepByEndpoint[endpoint] = kv.Key;
+                    continue;
+                }
+                if (kv.Value.LastSeenUtc > _instances[keep].LastSeenUtc)
+                {
+                    duplicates.Add(keep);
+                    keepByEndpoint[endpoint] = kv.Key;
+                }
+                else
+                {
+                    duplicates.Add(kv.Key);
+                }
             }
+            foreach (var name in duplicates)
+            {
+                _instances.Remove(name);
+                _ownDiagnostics.Add($"{DateTime.Now:HH:mm:ss.fff} 同端点旧实例 {name}");
+            }
+
+            // 选“最近活跃且字段完整”的一台，而不是字典里的第一台
+            KeyValuePair<string, InstanceState>? best = null;
+            foreach (var kv in _instances)
+            {
+                if (kv.Value.Address is null || kv.Value.Port == 0)
+                {
+                    continue;
+                }
+                if (best is null || kv.Value.LastSeenUtc > best.Value.Value.LastSeenUtc)
+                {
+                    best = kv;
+                }
+            }
+            if (best is not null)
+            {
+                var state = best.Value.Value;
+                var token = state.Token.Length > 0
+                    ? state.Token
+                    : best.Value.Key.Split('.')[0][InstancePrefix.Length..];
+                var phone = new DiscoveredPhone(state.Address!, state.Port, token,
+                    $"http://{state.Address}:{state.Port}/?t={Uri.EscapeDataString(token)}");
+                PublishLocked(phone);
+            }
+        }
+        // 查询放到锁外，避免持锁做 socket 发送
+        foreach (var query in queries)
+        {
+            _mdns.Query(query.Name, query.Type);
         }
     }
 

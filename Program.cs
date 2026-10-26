@@ -41,9 +41,9 @@ internal static class Program
             _singleInstance = new Mutex(true, @"Local\PengchuanTray", out var isFirst);
             if (!isFirst)
             {
-                Log("another instance is running");
-                MessageBox.Show("碰传share 托盘助手已经在运行（看屏幕右下角托盘图标）。", "碰传share",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                // 开机自启可能由「启动文件夹 + 计划任务 + Run 键」同时触发；
+                // 多实例时静默退出，避免弹窗打扰用户，只保留第一个托盘实例。
+                Log("another instance is running, exit silently");
                 return 0;
             }
 

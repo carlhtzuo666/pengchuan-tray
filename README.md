@@ -12,10 +12,13 @@
 | 能力 | 说明 |
 |---|---|
 | 托盘常驻 | 单实例；托盘菜单显示「手机：已就绪 192.168.x.x:8080」 |
-| mDNS 发现 | 浏览 `_nfcshare._tcp`，从 SRV/TXT 拿到 IP、端口、一次性令牌 |
-| 自动打开局域网页 | 发现手机后用默认浏览器打开 `http://ip:port/?t=token`（局域网直连，零云成本） |
-| 自动接收文件 | 读取手机 `/api/outbox/list`，把发件箱文件流式下载到 `桌面\碰传share` |
-| 开机自动启动 | 勾选后在当前用户登录时启动（HKCU Run，一次性，非常驻服务） |
+| mDNS 发现 | 浏览 `_nfcshare._tcp`，1 秒轮询 + 收到 PTR 立即补 SRV/TXT；直接用报文来源 IP，不等 A 记录 |
+| 打开前校验 | 先用 `/api/ping` 确认 token 与端口可用，失败自动重试，避免打开 401/连接失败的页面 |
+| 同端点去重 | 同一 `IP:port` 只保留最新 mDNS 实例，手机换 token 时不会在旧/新记录间反复切换 |
+| 打开时延 | 手机 mDNS 注册后约 **0.2–0.4 秒**打开（2026-10-24 实测）；连同 App 启动，整体约 1 秒量级 |
+| 自动打开局域网页 | **默认开启**：发现手机后用默认浏览器打开 `http://ip:port/?t=token`（局域网直连，零云成本） |
+| 自动接收文件 | **默认开启**：读取手机 `/api/outbox/list`，把发件箱文件流式下载到 `桌面\碰传share` |
+| 开机自动启动 | **首次运行自动开启**：写入当前用户 HKCU Run（一次性，非常驻服务）；可在菜单取消 |
 | 云端降级 | 没有发现手机时，菜单可打开云端取件页 `https://share.ailinkfree.com/t/` |
 | 自检 | `PengchuanTray.exe --probe 8` 只做发现并把结果写入 `probe.json`，便于脚本验证 |
 
@@ -48,11 +51,13 @@ dotnet publish PengchuanTray.csproj -c Release -r win-x64 --self-contained true 
 
 ## 使用
 
-1. 手机打开碰传share，碰一下 NFC 标签，进入「等待电脑接入」；
-2. 运行 `PengchuanTray.exe`（或 `scripts/start-tray-dotnet.cmd`，见下）；
-3. 托盘出现图标后：
-   - 默认**自动接收文件**到 `桌面\碰传share`；
-   - 右键可「打开手机局域网页」「接收文件」「开机自动启动」。
+1. 手机打开碰传share，碰一下 NFC 标签，进入「等待上传文件」；
+2. 运行一次 `PengchuanTray.exe`（或 `scripts/start-tray-dotnet.cmd`，见下）；
+3. **首次运行会自动完成全部默认设置，无需手动勾选**：
+   - 自动写入开机自启（下次登录自动运行）；
+   - 默认开启「发现手机后自动打开网页」；
+   - 默认开启「发现手机后自动接收文件」到 `桌面\碰传share`。
+4. 手机再次碰标签后，托盘发现手机就会自动打开 `http://手机IP:8080/?t=...` 局域网页；想关闭任一项，右键托盘取消勾选即可（取消后不会被强行恢复）。
 
 ### Smart App Control 说明
 
@@ -67,6 +72,8 @@ dotnet PengchuanTray.dll
 或双击 `scripts/start-tray-dotnet.cmd`。
 
 长期方案：发布由 [SignPath Foundation](https://signpath.org/foundation) 免费签名的开源构建（见 [docs/SIGNPATH-APPLICATION.md](docs/SIGNPATH-APPLICATION.md)）。
+
+> 开机自启项写入的是 `C:\Program Files\dotnet\dotnet.exe` + `PengchuanTray.dll`（微软签名主机），不依赖未签名 exe；即使双击单文件 exe 被 SmartScreen 拦截，开机自启仍可正常生效。
 
 ## 协议约定
 
@@ -113,9 +120,9 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 **PengchuanTray** is a tiny Windows tray helper for the *Pengchuan Share* phone app.
 
 - Discovers the phone over mDNS after an NFC tag tap;
-- Opens the phone's LAN web page in the default browser, or downloads the phone's outbox files to `Desktop\Pengchuan share`;
+- Auto-opens the phone's LAN web page and auto-downloads the outbox to `Desktop\Pengchuan share` (both enabled by default);
 - No service, no listening port, no telemetry;
-- Optional run-at-logon via HKCU Run;
+- Run-at-logon is enabled automatically on first run via HKCU Run (can be disabled from the tray menu);
 - MIT licensed.
 
 Build with .NET 10 SDK (`dotnet publish -c Release -r win-x64`).  

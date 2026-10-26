@@ -14,6 +14,8 @@ public sealed class MdnsRecord
     public ushort Port { get; init; }
     public IReadOnlyList<string> Texts { get; init; } = Array.Empty<string>();
     public string? Address { get; init; }
+    /// <summary>收到该记录的报文来源 IP（同一局域网内通常就是手机 IP，可免去 A 记录查询）</summary>
+    public string? SourceAddress { get; set; }
 }
 
 /// <summary>
@@ -96,7 +98,6 @@ public sealed class MdnsClient : IDisposable
         _socket = socket;
         _cts = new CancellationTokenSource();
         _ = Task.Run(() => ReceiveLoopAsync(_cts.Token));
-        _ = Task.Run(() => QueryLoopAsync(_cts.Token));
         lock (_gate)
         {
             Diagnostics.Add($"{DateTime.Now:HH:mm:ss.fff} mDNS socket 已就绪（5353 复用）");
@@ -125,21 +126,6 @@ public sealed class MdnsClient : IDisposable
         }
     }
 
-    private async Task QueryLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await Task.Delay(3000, ct);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-        }
-    }
-
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
         var socket = _socket!;
@@ -153,6 +139,14 @@ public sealed class MdnsClient : IDisposable
                 var records = DnsWire.Parse(buffer, result.ReceivedBytes);
                 if (records.Count > 0)
                 {
+                    // 记录来源 IP：手机发的 PTR/SRV/TXT 就来自手机，可直接当 A 记录用
+                    if (result.RemoteEndPoint is IPEndPoint source)
+                    {
+                        foreach (var record in records)
+                        {
+                            record.SourceAddress = source.Address.ToString();
+                        }
+                    }
                     RecordsReceived?.Invoke(records);
                 }
             }

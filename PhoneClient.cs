@@ -23,6 +23,26 @@ public sealed class PhoneClient : IDisposable
     public async Task<IReadOnlyList<RemoteFile>> ListDavAsync(DiscoveredPhone phone, CancellationToken ct = default)
         => await ListAsync(phone, "/api/dav/list", ct);
 
+    /// <summary>
+    /// 快速探测手机局域网服务是否真的可用（token 是否有效、端口是否在听）。
+    /// 打开浏览器前先确认，避免把用户带到一个 401/连接失败的页面。
+    /// </summary>
+    public async Task<bool> PingAsync(DiscoveredPhone phone, int timeoutMs = 800, CancellationToken ct = default)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeoutMs);
+            var url = $"http://{phone.Host}:{phone.Port}/api/ping?t={Uri.EscapeDataString(phone.Token)}";
+            using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            return response.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private async Task<IReadOnlyList<RemoteFile>> ListAsync(DiscoveredPhone phone, string path, CancellationToken ct)
     {
         var url = $"http://{phone.Host}:{phone.Port}{path}?t={Uri.EscapeDataString(phone.Token)}";
