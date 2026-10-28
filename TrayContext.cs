@@ -42,7 +42,7 @@ public sealed class TrayContext : ApplicationContext
 
     public TrayContext()
     {
-        _statusItem = new ToolStripMenuItem("手机：未发现（碰一下电脑上的 NFC 标签）") { Enabled = false };
+        _statusItem = new ToolStripMenuItem("手机：未发现（贴一下电脑上的 NFC 标签）") { Enabled = false };
         _openLanItem = new ToolStripMenuItem("打开手机局域网页", null, (_, _) => OpenLanPage()) { Enabled = false };
         _receiveItem = new ToolStripMenuItem("接收文件（下载手机发件箱）", null, async (_, _) => await ReceiveAsync());
         _autoOpenItem = new ToolStripMenuItem("发现手机后自动打开网页", null, (_, _) => ToggleAutoOpen())
@@ -182,7 +182,7 @@ public sealed class TrayContext : ApplicationContext
         var phone = _discovery.Current;
         if (phone is null)
         {
-            _statusItem.Text = "手机：未发现（碰一下电脑上的 NFC 标签）";
+            _statusItem.Text = "手机：未发现（贴一下电脑上的 NFC 标签）";
             _openLanItem.Enabled = false;
         }
         else
@@ -198,7 +198,7 @@ public sealed class TrayContext : ApplicationContext
         var phone = _discovery.Current;
         if (phone is null)
         {
-            Notify("没有发现手机", "请让手机碰一下 NFC 标签并停留在待上传页");
+            Notify("没有发现手机", "请让手机贴一下 NFC 标签并停留在待上传页");
             return;
         }
         OpenUrl(phone.Url);

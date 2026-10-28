@@ -50,20 +50,20 @@ None. No analytics, telemetry, crash reporting, advertising, or remote logging. 
 
 ### 中文（备用）
 
-**项目名：** PengchuanTray（碰传share Windows 托盘助手）
+**项目名：** PengchuanTray（贴传 Windows 托盘助手）
 
 **仓库：** https://github.com/carlhtzuo666/pengchuan-tray
 
 **许可证：** MIT
 
 **项目说明：**
-PengchuanTray 是一个开源 Windows 托盘小工具，配合碰传share 手机 App 使用。用户在手机上碰 NFC 标签后，手机在同一 Wi-Fi 下启动临时 HTTP 服务；PengchuanTray 通过 mDNS（`_nfcshare._tcp`）发现手机，然后用默认浏览器打开手机的局域网页，或把手机「发件箱」文件下载到桌面。它不安装系统服务、不监听端口，也不包含遥测、广告或任何数据收集。
+PengchuanTray 是一个开源 Windows 托盘小工具，配合贴传 手机 App 使用。用户在手机上碰 NFC 标签后，手机在同一 Wi-Fi 下启动临时 HTTP 服务；PengchuanTray 通过 mDNS（`_nfcshare._tcp`）发现手机，然后用默认浏览器打开手机的局域网页，或把手机「发件箱」文件下载到桌面。它不安装系统服务、不监听端口，也不包含遥测、广告或任何数据收集。
 
 **构建说明：**
 GitHub Actions 公开构建（`windows-latest` + .NET 10 SDK），执行 `dotnet publish ... --self-contained true -p:PublishSingleFile=true`，产物上传为 Actions artifact，签名对象为 `PengchuanTray.exe`。
 
 **商业关系：**
-T1 是碰传share 商业 App 的免费开源助手，本身不售卖、无付费功能、无授权校验；仅 T1 开源，手机 App 与云端服务保持闭源。
+T1 是贴传 商业 App 的免费开源助手，本身不售卖、无付费功能、无授权校验；仅 T1 开源，手机 App 与云端服务保持闭源。
 
 **数据收集：**
 无。无分析、遥测、崩溃上报、广告或远程日志；仅访问局域网内手机服务。

@@ -59,7 +59,7 @@ git push origin v0.2.1
 - [ ] `dotnet build -c Release` 通过
 - [ ] `dotnet run -- --probe 3` 能发现手机（手机处于待上传页）
 - [ ] 托盘菜单「开机自动启动」可勾选/取消
-- [ ] 自动接收文件落盘到 `桌面\碰传share`
+- [ ] 自动接收文件落盘到 `桌面\贴传`
 - [ ] 签名后 `signtool verify /pa /v` 通过
 - [ ] 在开启 Smart App Control 的 Windows 11 上双击可运行
 - [ ] Release Notes 说明改动与已知问题

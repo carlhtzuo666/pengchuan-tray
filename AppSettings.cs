@@ -23,7 +23,7 @@ public sealed class AppSettings
     /// <summary>是否在托盘运行期间监听扫码贴纸（默认开启；关闭后不发起任何轮询）</summary>
     public bool QrListenEnabled { get; set; } = true;
 
-    /// <summary>发现手机后自动用默认浏览器打开局域网页（默认开启：碰标签后零输入直达）</summary>
+    /// <summary>发现手机后自动用默认浏览器打开局域网页（默认开启：贴标签后零输入直达）</summary>
     public bool AutoOpenBrowser { get; set; } = true;
 
     /// <summary>发现手机后自动把「发件箱」文件下载到 DownloadFolder（默认开启）</summary>
