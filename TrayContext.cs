@@ -82,7 +82,7 @@ public sealed class TrayContext : ApplicationContext
         _icon = new NotifyIcon
         {
             Icon = BuildIcon(),
-            Text = "碰传share · 托盘助手",
+            Text = "贴传 · 托盘助手",
             Visible = true,
             ContextMenuStrip = menu
         };
@@ -94,7 +94,7 @@ public sealed class TrayContext : ApplicationContext
 
         // 启动提示：Windows 11 默认把新图标收进托盘溢出区，提示用户去哪里找
         var startupTip = IsStartupEnabled() ? "已默认开启开机自启。" : string.Empty;
-        Notify("碰传share 托盘助手已启动",
+        Notify("贴传托盘助手已启动",
             $"图标在右下角托盘（看不到请点 ^ 展开）。{startupTip}手机就绪后会自动打开局域网页并接收文件。");
 
         _ticker.Tick += (_, _) =>
@@ -190,7 +190,7 @@ public sealed class TrayContext : ApplicationContext
             _statusItem.Text = $"手机：已就绪 {phone.Display}";
             _openLanItem.Enabled = true;
         }
-        _icon.Text = Truncate(phone is null ? "碰传share · 未发现手机" : $"碰传share · {phone.Display}", 120);
+        _icon.Text = Truncate(phone is null ? "贴传 · 未发现手机" : $"贴传 · {phone.Display}", 120);
     }
 
     private void OpenLanPage()
@@ -242,7 +242,7 @@ public sealed class TrayContext : ApplicationContext
 
             var folder = _settings.ResolvedDownloadFolder;
             var progress = new Progress<double>(value =>
-                _icon.Text = Truncate($"碰传share · 接收中 {value:P0}", 120));
+                _icon.Text = Truncate($"贴传 · 接收中 {value:P0}", 120));
 
             foreach (var file in files)
             {
@@ -303,7 +303,7 @@ public sealed class TrayContext : ApplicationContext
         _settings.QrListenEnabled = !_settings.QrListenEnabled;
         _qrListenItem.Checked = _settings.QrListenEnabled;
         _settings.Save();
-        Notify("碰传share", _settings.QrListenEnabled ? "已开启扫码贴纸监听" : "已关闭扫码贴纸监听");
+        Notify("贴传", _settings.QrListenEnabled ? "已开启扫码贴纸监听" : "已关闭扫码贴纸监听");
     }
 
     /// <summary>贴纸 ID 首次使用时生成并持久化：pc_&lt;机器码&gt;_&lt;随机密钥&gt;</summary>
@@ -397,7 +397,7 @@ public sealed class TrayContext : ApplicationContext
         _settings.StartupDefaultApplied = true;
         _settings.Save();
         _startupItem.Checked = IsStartupEnabled();
-        Notify("碰传share", _startupItem.Checked ? "已设置为开机自动启动" : "已取消开机自动启动");
+        Notify("贴传", _startupItem.Checked ? "已设置为开机自动启动" : "已取消开机自动启动");
     }
 
     private static bool IsStartupEnabled()

@@ -35,7 +35,7 @@ public sealed class AppSettings
     /// </summary>
     public bool StartupDefaultApplied { get; set; }
 
-    /// <summary>下载目录；空则用桌面\碰传share</summary>
+    /// <summary>下载目录；空则用桌面\贴传（旧目录 桌面\碰传share 存在且新目录未建时沿用旧目录）</summary>
     public string DownloadFolder { get; set; } = string.Empty;
 
     /// <summary>没有发现手机时，「接收文件」是否自动改为打开云端取件页</summary>
@@ -44,8 +44,21 @@ public sealed class AppSettings
     [JsonIgnore]
     public string ResolvedDownloadFolder =>
         string.IsNullOrWhiteSpace(DownloadFolder)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "碰传share")
+            ? DefaultDownloadFolder()
             : DownloadFolder;
+
+    /// <summary>
+    /// 默认下载目录：桌面\贴传。
+    /// 改名兼容：新目录尚未创建而旧目录（桌面\碰传share）已存在时继续沿用旧目录，
+    /// 避免老用户升级后找不到历史下载文件。
+    /// </summary>
+    private static string DefaultDownloadFolder()
+    {
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var current = Path.Combine(desktop, "贴传");
+        var legacy = Path.Combine(desktop, "碰传share");
+        return !Directory.Exists(current) && Directory.Exists(legacy) ? legacy : current;
+    }
 
     private static string SettingsPath()
     {

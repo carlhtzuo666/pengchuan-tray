@@ -58,7 +58,7 @@ internal static class Program
         catch (Exception ex)
         {
             Log("FATAL " + ex);
-            MessageBox.Show($"碰传share 托盘助手启动失败：{ex.Message}", "碰传share",
+            MessageBox.Show($"贴传托盘助手启动失败：{ex.Message}", "贴传",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }

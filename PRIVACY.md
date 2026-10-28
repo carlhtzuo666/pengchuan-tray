@@ -4,7 +4,7 @@
 
 ## 中文
 
-PengchuanTray（碰传share Windows 托盘助手）是一个开源 Windows 工具，用于在同一局域网内与手机上的碰传share App 传输文件。
+PengchuanTray（贴传 Windows 托盘助手）是一个开源 Windows 工具，用于在同一局域网内与手机上的贴传 App 传输文件。
 
 ### 我们收集什么
 
@@ -24,7 +24,7 @@ PengchuanTray（碰传share Windows 托盘助手）是一个开源 Windows 工�
 
 ### 本地数据
 
-- 下载的文件保存在你指定的目录（默认 `桌面\碰传share`）；
+- 下载的文件保存在你指定的目录（默认 `桌面\贴传`）；
 - 配置保存在程序同目录的 `settings.json`（或 `%LOCALAPPDATA%\PengchuanTray`）；
 - 调试日志（`startup.log`、`probe.json`）仅在你主动运行调试模式时生成，不会上传。
 
