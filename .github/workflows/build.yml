@@ -46,6 +46,34 @@ jobs:
         shell: pwsh
         run: Copy-Item scripts/start-tray-dotnet.cmd dist/framework/ -Force
 
+      # 未签名产物会被杀软/企业 EDR 拦截，这里明确写清原因与正解
+      - name: Add unsigned-artifact notice
+        shell: pwsh
+        run: |
+          @'
+          未签名测试版说明
+          ================
+          本目录中的 exe 未做 Authenticode 签名，Windows Defender / SmartScreen /
+          企业 EDR 会提示「存在安全隐患」并可能直接拦截，这是未签名的正常表现。
+          - 仅供内部测试使用，不要分发给终端用户。
+          - 正式分发请使用已签名的 Release 产物（配置 SignPath 变量后打 v* tag 生成）。
+          - 校验签名：Get-AuthenticodeSignature .\PengchuanTray.exe  （期望 Status=Valid）
+          - 校验哈希：与同目录 SHA256SUMS.txt 比对
+          - 仍被拦截时：用同目录「启动贴传助手.cmd」经微软签名的 dotnet 宿主启动。
+          '@ | Set-Content -Path dist/framework/unsigned-build-notice.txt -Encoding UTF8
+          Copy-Item dist/framework/unsigned-build-notice.txt dist/self-contained/ -Force
+
+      # 逐文件校验和，便于接收方核对
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem dist/framework, dist/self-contained -Recurse -File | Sort-Object FullName
+          $lines = foreach ($f in $files) {
+            $rel = $f.FullName -replace [regex]::Escape("$PWD\"), ''
+            "$((Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $rel"
+          }
+          $lines | Set-Content -Path dist/SHA256SUMS.txt -Encoding ASCII
+
       - name: Upload unsigned framework build
         id: upload-framework
         uses: actions/upload-artifact@v4

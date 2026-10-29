@@ -7,6 +7,12 @@ release/
 *.suo
 .vs/
 
+# 代码签名材料（**绝不入库**：含私钥与口令）
+signing/
+*.pfx
+*.p12
+*.snk
+
 # 运行时生成（不要提交）
 settings.json
 probe.json

@@ -93,11 +93,13 @@ public sealed class TrayContext : ApplicationContext
 
         _discovery.Changed += OnPhoneChanged;
         _discovery.Start();
-        // 首次运行/升级后自动注册开机自启，用户无需手动勾选
-        EnsureDefaultStartup();
+        // 开机自启改为**用户显式开启**（托盘菜单勾选）。
+        // 原因：程序在首次运行时自动写注册表 Run 键，是杀软/企业 EDR 判定
+        // 「可疑自启动」最典型的特征之一，也是未签名程序被拦的高频原因；
+        // 同时也不再给用户「装完就悄悄开机自启」的意外感。
 
         // 启动提示：Windows 11 默认把新图标收进托盘溢出区，提示用户去哪里找
-        var startupTip = IsStartupEnabled() ? "已默认开启开机自启。" : string.Empty;
+        var startupTip = IsStartupEnabled() ? "已开启开机自启。" : "需要开机自启可在托盘菜单勾选。";
         Notify("贴传托盘助手已启动",
             $"图标在右下角托盘（看不到请点 ^ 展开）。{startupTip}手机就绪后会自动打开局域网页并接收文件。");
 
