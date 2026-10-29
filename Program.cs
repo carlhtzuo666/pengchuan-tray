@@ -47,7 +47,7 @@ internal static class Program
                 return 0;
             }
 
-            ApplicationConfiguration.Initialize();
+            InitializeWinForms();
             Log("winforms initialized");
             using var context = new TrayContext();
             Log("tray context created");
@@ -62,5 +62,28 @@ internal static class Program
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
+    }
+
+    /// <summary>
+    /// WinForms 初始化。
+    /// 单文件发布时 WinForms 的 EnableVisualStyles 偶尔取不到程序清单
+    /// （Assembly.Location 为空 → 打开清单文件流失败），会让托盘助手整个起不来。
+    /// 这里对初始化做降级：清单取不到就退回手工设置 DPI 感知，保证托盘仍能起来。
+    /// </summary>
+    private static void InitializeWinForms()
+    {
+        try
+        {
+            ApplicationConfiguration.Initialize();
+            return;
+        }
+        catch (Exception ex)
+        {
+            Log("ApplicationConfiguration.Initialize failed: " + ex.Message);
+        }
+
+        try { Application.SetHighDpiMode(HighDpiMode.SystemAware); } catch { }
+        try { Application.EnableVisualStyles(); } catch { }
+        try { Application.SetCompatibleTextRenderingDefault(false); } catch { }
     }
 }

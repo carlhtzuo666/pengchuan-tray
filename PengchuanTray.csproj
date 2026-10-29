@@ -35,11 +35,12 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <!--
-      不自解压原生库：把 native 库抽到 %TEMP% 再加载是杀软/EDR 判定
-      「可疑自解压」的特征之一，未签名程序被拦的高频原因之一。设为 false
-      让原生库留在单文件内直接加载。
+      自解压原生库保持 true：实测设为 false 会让 WinForms 在 EnableVisualStyles
+      阶段取不到程序清单（Assembly.Location 为空 → FileStream 打开失败），
+      托盘助手 GUI 直接启动崩溃。功能可用优先于「少解一个 %TEMP% 目录」这项
+      弱化的杀软启发式特征——真正的解法是 Authenticode 签名。
     -->
-    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
 
