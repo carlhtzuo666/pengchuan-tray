@@ -14,10 +14,13 @@
 | **未签名**（主因） | `Get-AuthenticodeSignature` 返回 `NotSigned`，发布者显示「未知」 | 见下方三条签名路线 |
 | **Mark-of-the-Web** | 从浏览器/网盘下载的文件带 `Zone.Identifier`，Windows 直接弹「Windows 已保护你的电脑」 | 打包时用 `Unblock-File` 清除 |
 | **杀软拦截 WinForms 临时清单**（起不来的真因） | WinForms 初始化要把程序清单写进 `%TEMP%` 下的随机名文件（如 `wtejlnte.hvx`）再交给系统加载；杀软/EDR 拦截这个文件时抛 `Access to the path '...Temp\xxx' is denied`，托盘助手**直接启动崩溃** | 已在 `Program.cs` 内置**启动降级**：清单取不到就退回手工设置 DPI 感知，托盘照常起来（启动日志会记一行 `ApplicationConfiguration.Initialize failed: ...`） |
+| **企业 EDR 拦截 ShellExecute 启动**（双击没反应的真因） | Sentinel Agent 等企业 EDR 会拦截**自定义 exe 的 ShellExecute 启动**（资源管理器双击），报「操作被取消」(Win32 1223)。**与签名无关**——签名后仍被拦 | 已提供**兼容版**（见第六节）：用微软签名的 `dotnet.exe` 加载同一 dll |
 | **首启自动写注册表 Run 键** | 「静默开机自启」是恶意软件画像里权重最高的行为之一 | 已改为**用户显式勾选**（托盘菜单「开机自动启动」） |
 | 版本元数据不完整 | 文件属性里缺产品名/版权/仓库地址，容易被判为「来源不明的小程序」 | csproj 已补齐 |
 
-> 结论：**签名是唯一能真正消除告警的手段**；启动降级解决「装上了却起不来」；其余改动只是降低被误判的概率。
+> 结论：**签名**消除「未知发布者」告警；**启动降级**解决「装上了却起不来」；**兼容版启动器**解决「企业 EDR 拦截双击」。
+>
+> **重要区分**（实测对照，2026-10-29）：同一个 exe，`cmd /c` 启动成功、`explorer` 双击被拦 —— 说明这是 EDR 对 ShellExecute 路径的执行策略，不是程序缺陷，也不是提权问题（补 `trustInfo/asInvoker` 后仍被拦）。
 >
 > 另注：`IncludeNativeLibrariesForSelfExtract` 试过改成 `false`（少往 `%TEMP%` 解压原生库），
 > 但实测会让 WinForms 初始化取不到清单而崩溃，**已回退为 `true`**——功能可用优先于这点弱化的启发式收益。
@@ -95,7 +98,35 @@ Get-AuthenticodeSignature .\PengchuanTray.exe   # 期望 Status=Valid
 5. 临时自用：把目录加入杀软排除项（Defender：`Add-MpPreference -ExclusionPath "D:\path"`）；
 6. 仍不行时用 `启动贴传助手.cmd`（走微软签名的 dotnet 宿主，不经被拦的 exe）。
 
-## 六、注意事项
+## 六、企业 EDR 拦截双击时：用兼容版启动器
+
+如果**签名之后双击仍然被拦**（提示"存在安全隐患""操作被取消"），说明是企业 EDR
+在执行策略层面拦截了自定义 exe 的 ShellExecute 启动。此时用**兼容版**：
+
+```
+dist\release-<日期>\compatible\
+├── 启动贴传助手.cmd     ← 双击这个
+├── PengchuanTray.dll
+├── PengchuanTray.exe
+├── QRCoder.dll
+├── PengchuanTray.deps.json / runtimeconfig.json
+└── 兼容版使用说明.txt
+```
+
+**原理**：`启动贴传助手.cmd` 用**微软签名的 `dotnet.exe`** 加载同一个程序集
+（`dotnet.exe PengchuanTray.dll`）。EDR 对微软签名宿主放行，因此可以绕过对自定义 exe 的拦截。
+
+**前提**：目标机需装 .NET 10 Desktop Runtime（<https://dotnet.microsoft.com/download/dotnet/10.0>）。
+
+**注意**：用这种方式启动后，任务管理器里的进程名是 **`dotnet.exe`**（不是 `PengchuanTray.exe`），
+这是正常的；托盘图标、功能与标准版完全一致。
+
+**已知坑（改启动器前必读）**：`.cmd` 文件必须**纯 ASCII**。cmd.exe 按 OEM 代码页
+（中文系统是 GBK）解析 `.cmd`，若文件里含 UTF-8 中文注释，会被当成命令执行并报
+`'xxx' is not recognized as an internal or external command`，启动器直接崩。
+中文说明放在同目录的 `兼容版使用说明.txt` 里。
+
+## 七、注意事项
 
 - `signing/` 目录（含 `.pfx` 与口令文件）已在 `.gitignore` 中，**不要提交**；
 - 自签名证书的口令明文存在 `signing/cert-password.txt`，仅限本机；
