@@ -34,41 +34,86 @@ if (-not (Test-Path $dotnet)) {
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
 
+# Stop any running tray instance before publishing. A tray started through the
+# dotnet host keeps PengchuanTray.dll locked, and MSBuild then fails with
+# MSB3027 "file is locked by .NET Host" after 10 retries.
+function Stop-RunningTray {
+  $stopped = 0
+  Get-Process -Name 'PengchuanTray' -ErrorAction SilentlyContinue | ForEach-Object {
+    try { $_.Kill(); $stopped++ } catch { }
+  }
+  Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match 'PengchuanTray' } | ForEach-Object {
+      try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; $stopped++ } catch { }
+    }
+  if ($stopped -gt 0) {
+    Write-Host "== stopped $stopped running tray process(es) to release file locks =="
+    Start-Sleep -Seconds 2
+  }
+}
+Stop-RunningTray
+
 $stamp = Get-Date -Format 'yyyyMMdd'
 $outRoot = Join-Path $root "dist\release-$stamp"
 New-Item -ItemType Directory -Force -Path $outRoot | Out-Null
 
 function Publish-Variant([string]$name, [bool]$selfContained) {
   $out = Join-Path $outRoot $name
-  & $dotnet publish (Join-Path $root 'PengchuanTray.csproj') `
+  # `$null = &` swallows dotnet's stdout so it does not leak into this function's
+  # return value (a bare `& ...` would make the caller's array contain dotnet
+  # log lines, which broke Join-Path with "Cannot find drive ...").
+  $null = & $dotnet publish (Join-Path $root 'PengchuanTray.csproj') `
     -c Release -r win-x64 `
     "--self-contained:$($selfContained.ToString().ToLowerInvariant())" `
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=false `
     -p:EnableCompressionInSingleFile=$($selfContained.ToString().ToLowerInvariant()) `
     -p:DebugType=none `
-    -o $out | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "publish failed for $name (exit $LASTEXITCODE)" }
+    -o $out
+  # Check the produced file instead of $LASTEXITCODE: a preceding pipeline can
+  # leave $LASTEXITCODE stale, which produced false "publish failed" errors.
+  $exe = Join-Path $out 'PengchuanTray.exe'
+  if (-not (Test-Path $exe)) { throw "publish produced no exe for $name" }
   Copy-Item (Join-Path $root 'scripts\start-tray-dotnet.cmd') $out -Force
   return $out
 }
 
 <#
-  兼容版：exe 与 dll 分离（PublishSingleFile=false），并附带「启动贴传助手.cmd」。
-  作用：企业 EDR（Sentinel Agent 等）拦截自定义 exe 直接执行时，
-  改用微软签名的 dotnet.exe 加载同一个 dll 即可正常启动。
-  这是本机（被 Sentinel 拦截）唯一实测可用的启动方式。
+  Compatible build: exe and dll side by side (PublishSingleFile=false), plus a
+  launcher script. Purpose: corporate EDR (Sentinel Agent etc.) blocks direct
+  execution of a custom exe; loading the same dll through Microsoft-signed
+  dotnet.exe works. This is the only launch path verified to work on a machine
+  where Sentinel blocks the exe (2026-10-29).
+
+  NOTE: this file must stay pure ASCII. Windows PowerShell 5.1 decodes a
+  non-BOM UTF-8 script as GBK, which mangles any Chinese literal (including
+  Chinese file names) and breaks Join-Path. The Chinese display names are
+  applied by copying from the ASCII source names below.
 #>
 function Publish-Compatible {
   $out = Join-Path $outRoot 'compatible'
-  & $dotnet publish (Join-Path $root 'PengchuanTray.csproj') `
+  # `$null = &` swallows dotnet stdout so it does not leak into the return value.
+  $null = & $dotnet publish (Join-Path $root 'PengchuanTray.csproj') `
     -c Release -r win-x64 --self-contained false `
     -p:PublishSingleFile=false `
     -p:DebugType=none `
-    -o $out | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'publish failed for compatible build' }
-  Copy-Item (Join-Path $root 'scripts\启动贴传助手.cmd') $out -Force
-  Copy-Item (Join-Path $root 'scripts\兼容版使用说明.txt') $out -Force
+    -o $out
+  # 用产物文件判断成败，不用 $LASTEXITCODE（可能被前面的管道污染）
+  $dll = Join-Path $out 'PengchuanTray.dll'
+  if (-not (Test-Path $dll)) { throw 'compatible publish produced no dll' }
+
+  # Source files are ASCII-named; rename to the Chinese display names users see.
+  # Chinese names are built from Unicode code points so this script stays pure
+  # ASCII (PowerShell 5.1 would otherwise mangle the literals on a GBK console).
+  #   launcher: "launch Tiechuan assistant.cmd"  (U+542F U+52A8 U+8D34 U+4F20 U+52A9 U+624B)
+  #   readme  : "compatible edition usage.txt"   (U+517C U+5BB9 U+7248 U+4F7F U+7528 U+8BF4 U+660E)
+  $launcherName = [string]::Concat([char]0x542F, [char]0x52A8, [char]0x8D34, [char]0x4F20,
+    [char]0x52A9, [char]0x624B, '.cmd')
+  $readmeName = [string]::Concat([char]0x517C, [char]0x5BB9, [char]0x7248, [char]0x4F7F,
+    [char]0x7528, [char]0x8BF4, [char]0x660E, '.txt')
+
+  Copy-Item (Join-Path $root 'scripts\launcher-compatible.cmd') (Join-Path $out $launcherName) -Force
+  Copy-Item (Join-Path $root 'scripts\readme-compatible.txt') (Join-Path $out $readmeName) -Force
   return $out
 }
 
