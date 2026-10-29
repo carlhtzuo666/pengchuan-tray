@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <assemblyIdentity version="1.0.0.0" name="PengchuanTray.app" />
+
+  <!--
+    显式声明「以当前用户权限运行，永不请求提权」。
+    缺失这段 trustInfo 时，ShellExecute（资源管理器双击）路径在某些 Windows 版本
+    与 EDR 环境下会出现「操作被用户取消」(Win32 1223) 的假提权拦截，
+    表现为双击没反应、只有命令行能启动。写成 asInvoker 后双击恢复正常。
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
       <!-- Windows 10 / 11 -->

@@ -53,10 +53,30 @@ function Publish-Variant([string]$name, [bool]$selfContained) {
   return $out
 }
 
+<#
+  兼容版：exe 与 dll 分离（PublishSingleFile=false），并附带「启动贴传助手.cmd」。
+  作用：企业 EDR（Sentinel Agent 等）拦截自定义 exe 直接执行时，
+  改用微软签名的 dotnet.exe 加载同一个 dll 即可正常启动。
+  这是本机（被 Sentinel 拦截）唯一实测可用的启动方式。
+#>
+function Publish-Compatible {
+  $out = Join-Path $outRoot 'compatible'
+  & $dotnet publish (Join-Path $root 'PengchuanTray.csproj') `
+    -c Release -r win-x64 --self-contained false `
+    -p:PublishSingleFile=false `
+    -p:DebugType=none `
+    -o $out | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'publish failed for compatible build' }
+  Copy-Item (Join-Path $root 'scripts\启动贴传助手.cmd') $out -Force
+  Copy-Item (Join-Path $root 'scripts\兼容版使用说明.txt') $out -Force
+  return $out
+}
+
 Write-Host '== publish =='
 $variants = @()
 if (-not $SelfContainedOnly) { $variants += ,@('framework', (Publish-Variant 'framework' $false)) }
 $variants += ,@('self-contained', (Publish-Variant 'self-contained' $true))
+$variants += ,@('compatible', (Publish-Compatible))
 
 if (-not $SkipSign) {
   Write-Host '== sign =='
