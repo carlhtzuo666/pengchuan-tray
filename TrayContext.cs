@@ -30,10 +30,12 @@ public sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _autoDownloadItem;
     private readonly ToolStripMenuItem _startupItem;
     private readonly ToolStripMenuItem _qrStickerItem;
+    private readonly ToolStripMenuItem _qrUniversalItem;
     private readonly ToolStripMenuItem _qrListenItem;
     private readonly QrOfferClient _qrClient = new();
 
     private string? _openedToken;
+    private string? _openedCloudToken;
     private bool _receiving;
     private bool _exiting;
     private bool _qrChecking;
@@ -58,6 +60,7 @@ public sealed class TrayContext : ApplicationContext
             Checked = IsStartupEnabled()
         };
         _qrStickerItem = new ToolStripMenuItem("显示/打印扫码贴纸", null, (_, _) => ShowQrSticker());
+        _qrUniversalItem = new ToolStripMenuItem("显示/打印通用贴纸（手机电脑通用）", null, (_, _) => ShowUniversalSticker());
         _qrListenItem = new ToolStripMenuItem("监听扫码贴纸", null, (_, _) => ToggleQrListen())
         {
             Checked = _settings.QrListenEnabled
@@ -69,6 +72,7 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add(_openLanItem);
         menu.Items.Add(_receiveItem);
         menu.Items.Add(_qrStickerItem);
+        menu.Items.Add(_qrUniversalItem);
         menu.Items.Add(_qrListenItem);
         menu.Items.Add(new ToolStripMenuItem("打开云端取件页", null, (_, _) => OpenUrl(CloudPickupUrl)));
         menu.Items.Add(new ToolStripSeparator());
@@ -165,7 +169,22 @@ public sealed class TrayContext : ApplicationContext
             if (_openedToken != phone.Token)
             {
                 Log($"ping 失败 {phone.Display}");
-                Notify("局域网暂不可达", $"手机 {phone.Display} 未响应，请保持待上传页并确认同一 Wi-Fi");
+                // 局域网不可达（多半是手机与电脑不在同一网络）：自动打开云端取件页，
+                // 让用户多一条「走云端」的通路——手机端可在待上传页点「改走云端上传」，
+                // 文件就会出现在该页面列表里（同一 token 只开一次，避免反复弹页）。
+                if (_settings.AutoOpenBrowser && _openedCloudToken != phone.Token)
+                {
+                    _openedCloudToken = phone.Token;
+                    Log("局域网不可达，打开云端取件页");
+                    OpenUrl(CloudPickupUrl);
+                    Notify("已打开云端取件页",
+                        $"手机 {phone.Display} 与电脑不在同一网络，局域网直连不可用。" +
+                        "请在手机上点「改走云端上传」，文件会出现在该页面里。");
+                }
+                else
+                {
+                    Notify("局域网暂不可达", $"手机 {phone.Display} 未响应，请保持待上传页并确认同一 Wi-Fi");
+                }
             }
         }
         finally
@@ -295,6 +314,31 @@ public sealed class TrayContext : ApplicationContext
         catch (Exception ex)
         {
             Notify("生成扫码贴纸失败", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 生成并打开「通用贴纸码」：内容就是云端取件页地址，手机系统相机扫码即可直达贴传；
+    /// 电脑侧不用扫码——托盘发现手机会自动接管（同一网络开局域网页，不同一网络开云端取件页）。
+    /// </summary>
+    private void ShowUniversalSticker()
+    {
+        try
+        {
+            var pageUrl = "https://share.ailinkfree.com/t/?from=sticker";
+            using var generator = new QRCodeGenerator();
+            using var qrData = generator.CreateQrCode(pageUrl, QRCodeGenerator.ECCLevel.Q);
+            var png = new PngByteQRCode(qrData);
+            var bytes = png.GetGraphic(20);
+            var path = Path.Combine(Path.GetTempPath(), "pengchuan-qr-universal.png");
+            File.WriteAllBytes(path, bytes);
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            Notify("通用贴纸码已生成", "打印后贴在电脑上：手机系统相机扫码即可直达贴传 App。\n" +
+                "电脑不用扫码——托盘发现手机会自动接管：同一网络开局域网页，不同一网络开云端取件页。");
+        }
+        catch (Exception ex)
+        {
+            Notify("生成通用贴纸码失败", ex.Message);
         }
     }
 
