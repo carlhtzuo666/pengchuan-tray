@@ -23,8 +23,13 @@ public sealed class AppSettings
     /// <summary>是否在托盘运行期间监听扫码贴纸（默认开启；关闭后不发起任何轮询）</summary>
     public bool QrListenEnabled { get; set; } = true;
 
-    /// <summary>发现手机后自动用默认浏览器打开局域网页（默认开启：贴标签后零输入直达）</summary>
-    public bool AutoOpenBrowser { get; set; } = true;
+    /// <summary>
+    /// 发现手机后自动用默认浏览器打开局域网页。
+    /// **默认关闭**：托盘改为常驻后，这一项若开着，手机每次碰标签/每次重开待上传页
+    /// 都会在电脑上弹出一个浏览器窗口，开会、全屏演示、写文档时会被抢焦点。
+    /// 主路径改为「只自动收文件 + 托盘气泡提示」，需要看网页时手动点托盘菜单。
+    /// </summary>
+    public bool AutoOpenBrowser { get; set; } = false;
 
     /// <summary>发现手机后自动把「发件箱」文件下载到 DownloadFolder（默认开启）</summary>
     public bool AutoDownloadOutbox { get; set; } = true;
@@ -104,6 +109,15 @@ public sealed class AppSettings
                         loaded.AutoOpenBrowser = true;
                         loaded.AutoDownloadOutbox = true;
                         loaded.StartupDefaultApplied = false;
+                        loaded.Save();
+                    }
+                    // v4 迁移：托盘改常驻后关闭「自动弹浏览器」，只保留「自动收文件 + 气泡提示」。
+                    // 常驻场景下 v3 的默认值会让手机每次碰标签都在电脑上弹窗抢焦点。
+                    if (loaded.SettingsVersion < 4)
+                    {
+                        loaded.SettingsVersion = 4;
+                        loaded.AutoOpenBrowser = false;
+                        loaded.AutoDownloadOutbox = true;
                         loaded.Save();
                     }
                     return loaded;

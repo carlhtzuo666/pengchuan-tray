@@ -2,8 +2,15 @@ using System.Text.Json;
 
 namespace PengchuanTray;
 
-/// <summary>手机「发件箱」里的一个文件（手机端 <c>/api/outbox/list</c> 返回）。</summary>
-public sealed record RemoteFile(string Name, string Url);
+/// <summary>
+/// 手机「发件箱」里的一个文件（手机端 <c>/api/outbox/list</c> 返回）。
+/// Size / Mtime 用于「只下载新文件」的去重：同名同大小同时间即视为已收过，避免轮询反复覆盖。
+/// </summary>
+public sealed record RemoteFile(string Name, string Url, long Size = 0, long Mtime = 0)
+{
+    /// <summary>去重键：名字或大小/时间任一变化都算新文件</summary>
+    public string DedupKey => $"{Name}|{Size}|{Mtime}";
+}
 
 /// <summary>
 /// 手机局域网服务客户端：只读发件箱 + 流式下载（带 Range 语义的服务端，这里先整文件流式拷贝）。
@@ -61,12 +68,20 @@ public sealed class PhoneClient : IDisposable
                 continue;
             }
             var rel = item.TryGetProperty("url", out var u) ? u.GetString() : null;
-            list.Add(new RemoteFile(name, rel ?? $"/outbox/{Uri.EscapeDataString(name)}"));
+            // size / mtime 用于「只下载新文件」的去重；老版本手机端不返回时按 0 处理，
+            // 此时调用方退化为「本地已存在同名文件则跳过」，不会反复覆盖。
+            var size = item.TryGetProperty("size", out var s) && s.TryGetInt64(out var sv) ? sv : 0;
+            var mtime = item.TryGetProperty("mtime", out var m) && m.TryGetInt64(out var mv) ? mv : 0;
+            list.Add(new RemoteFile(name, rel ?? $"/outbox/{Uri.EscapeDataString(name)}", size, mtime));
         }
         return list;
     }
 
-    /// <summary>下载单个文件到目录，返回落地路径</summary>
+    /// <summary>
+    /// 下载单个文件到目录，返回落地路径。
+    /// 本地已存在同名且大小一致时直接跳过（返回已有路径）：
+    /// 托盘重启后去重集合会清空，有了这个判断就不会把用户已经收过的文件反复覆盖。
+    /// </summary>
     public async Task<string> DownloadAsync(
         DiscoveredPhone phone,
         RemoteFile file,
@@ -76,6 +91,14 @@ public sealed class PhoneClient : IDisposable
     {
         Directory.CreateDirectory(directory);
         var dest = Path.Combine(directory, Sanitize(file.Name));
+        if (file.Size > 0)
+        {
+            var existing = new FileInfo(dest);
+            if (existing.Exists && existing.Length == file.Size)
+            {
+                return dest;
+            }
+        }
         var url = $"http://{phone.Host}:{phone.Port}{file.Url}?t={Uri.EscapeDataString(phone.Token)}";
 
         using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);

@@ -90,6 +90,10 @@ public sealed class PhoneDiscovery : IDisposable
 
     private async Task QueryLoopAsync(CancellationToken ct)
     {
+        // 退避策略：托盘改常驻后不能一直每秒查一次 mDNS（笔记本耗电 + 无线空口负担）。
+        // 前 30 秒密集发现（1 秒一轮，保证「碰标签后马上就看到手机」），
+        // 之后退避到 10 秒一轮（手机重新出现时最多晚 10 秒被发现，可接受）。
+        var startedAt = Environment.TickCount64;
         while (!ct.IsCancellationRequested)
         {
             Rescan();
@@ -109,8 +113,9 @@ public sealed class PhoneDiscovery : IDisposable
             }
             try
             {
-                // 1 秒一轮：发现要快，mDNS 报文很小，不会造成明显负担
-                await Task.Delay(1000, ct);
+                var elapsedMs = Environment.TickCount64 - startedAt;
+                var intervalMs = elapsedMs < 30_000 ? 1000 : 10_000;
+                await Task.Delay((int)intervalMs, ct);
             }
             catch (OperationCanceledException)
             {

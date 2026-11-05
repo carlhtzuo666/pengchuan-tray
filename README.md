@@ -93,6 +93,18 @@ dotnet PengchuanTray.dll
 
 完整隐私说明见 [PRIVACY.md](PRIVACY.md)。
 
+## 系统更改说明
+
+本程序会在**首次运行时征得用户可见提示后**对系统做以下更改，并在「关于/托盘菜单」中提供关闭入口：
+
+| 更改 | 具体内容 | 如何撤销 |
+|---|---|---|
+| 注册登录自启 | 创建 Windows 计划任务「贴传助手」，触发条件为**用户登录时**，延时 30 秒启动；不创建周期性任务 | 托盘菜单取消勾选「登录自动启动」，或 `schtasks /delete /tn "贴传助手" /f` |
+| 托盘常驻 | 启动后常驻通知区域，不占用主窗口 | 托盘菜单「退出」 |
+| 下载文件 | 仅在发现局域网手机后，把手机「发件箱」里的文件写入用户配置的下载目录（默认系统「下载」文件夹） | 托盘菜单关闭「自动接收文件」，或修改 `settings.json` 的 `downloadFolder` |
+
+程序不会修改注册表启动项（不使用 `HKCU\...\Run`），不会安装系统服务，不会更改系统网络或安全配置。
+
 ## Code signing policy
 
 Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).

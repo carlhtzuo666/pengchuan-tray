@@ -1,0 +1,7 @@
+{
+  "Endpoint": "https://REPLACE-ME.codesigning.azure.net/",
+  "CodeSigningAccountName": "REPLACE-ACCOUNT-NAME",
+  "CertificateProfileName": "REPLACE-PROFILE-NAME",
+  "ExcludeCredentials": ["ManagedIdentityClientId"],
+  "FileDigest": "REPLACE-WITH-FULL-PATH-TO-EXE"
+}

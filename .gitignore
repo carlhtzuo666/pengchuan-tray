@@ -8,10 +8,19 @@ release/
 .vs/
 
 # 代码签名材料（**绝不入库**：含私钥与口令）
-signing/
+# 用 signing/* 而不是 signing/，才能放行下面这个无密钥的配置模板目录；
+# *.pfx 等私钥规则仍然兜底，绝不会漏。
+signing/*
+!signing/azure/
 *.pfx
 *.p12
 *.snk
+
+# 安装包产物（33 MB 二进制，不入库；源码 setup.iss 要入库）
+installer/output/
+
+# HookGuard 本地状态（工具产生的临时文件）
+.hookguard/
 
 # 运行时生成（不要提交）
 settings.json

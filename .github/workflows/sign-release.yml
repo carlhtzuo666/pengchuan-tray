@@ -1,0 +1,63 @@
+# Sign the PengchuanTray release with Azure Artifact Signing (formerly Trusted Signing).
+#
+# Required repository secrets:
+#   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+# Required repository variables (Settings -> Variables):
+#   AS_ENDPOINT      e.g. https://your-acct.codesigning.azure.net/
+#   AS_ACCOUNT       e.g. your-acct
+#   AS_PROFILE       e.g. pengchuan-profile
+#
+# NOTE: action and input names in the Azure signing ecosystem changed when
+# "Trusted Signing" was renamed to "Artifact Signing". Verify the current names
+# against Microsoft Learn before the first real run.
+name: sign-release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-sign:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish single-file self-contained exe
+        run: >
+          dotnet publish -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=None
+          -o publish
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign with Artifact Signing
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AS_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.AS_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AS_PROFILE }}
+          files-folder: publish
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PengchuanTray-signed
+          path: publish/PengchuanTray.exe

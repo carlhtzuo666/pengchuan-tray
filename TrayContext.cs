@@ -41,6 +41,10 @@ public sealed class TrayContext : ApplicationContext
     private bool _qrChecking;
     private readonly HashSet<string> _opening = new();
     private readonly object _openGate = new();
+    /** 已下载过的文件去重键（名字|大小|时间）；重启托盘会重新收一遍，但不会覆盖已有同名文件 */
+    private readonly HashSet<string> _received = new();
+    /** 轮询发件箱进行中标志：避免 5 秒定时器重入并发下载同一批文件 */
+    private bool _polling;
 
     public TrayContext()
     {
@@ -93,20 +97,25 @@ public sealed class TrayContext : ApplicationContext
 
         _discovery.Changed += OnPhoneChanged;
         _discovery.Start();
-        // 开机自启改为**用户显式开启**（托盘菜单勾选）。
-        // 原因：程序在首次运行时自动写注册表 Run 键，是杀软/企业 EDR 判定
-        // 「可疑自启动」最典型的特征之一，也是未签名程序被拦的高频原因；
-        // 同时也不再给用户「装完就悄悄开机自启」的意外感。
+        // 首次运行/升级：自动注册**登录自启**（计划任务，不是 Run 键）。
+        // 必须常驻才能实现「手机碰标签 → 电脑自动收文件」：NFC 由手机读，电脑侧
+        // 没有 NFC 通路，不常驻就永远发现不了手机。用户之后可在菜单里取消。
+        // 用计划任务而非 Run 键，是为了避开「未签名 exe + Run 键」这个 EDR 高频告警组合。
+        EnsureDefaultStartup();
 
         // 启动提示：Windows 11 默认把新图标收进托盘溢出区，提示用户去哪里找
-        var startupTip = IsStartupEnabled() ? "已开启开机自启。" : "需要开机自启可在托盘菜单勾选。";
+        var startupTip = IsStartupEnabled() ? "已开启登录自动启动。" : "需要登录自启可在托盘菜单勾选。";
         Notify("贴传托盘助手已启动",
-            $"图标在右下角托盘（看不到请点 ^ 展开）。{startupTip}手机就绪后会自动打开局域网页并接收文件。");
+            $"图标在右下角托盘（看不到请点 ^ 展开）。{startupTip}手机就绪后会自动接收文件。");
 
         _ticker.Tick += (_, _) =>
         {
             RefreshStatus();
             _ = CheckQrOfferAsync();
+            // 持续轮询发件箱：只靠「发现手机」那一次下载会漏掉真正的主流程——
+            // 用户碰完标签才去选文件，那时发件箱还是空的，之后就永远不下。
+            // 这里每 5 秒补一次，只下载没见过的文件（按名字+大小+时间戳去重）。
+            _ = PollOutboxAsync();
         };
         _ticker.Start();
         RefreshStatus();
@@ -261,15 +270,8 @@ public sealed class TrayContext : ApplicationContext
                 return;
             }
 
-            var folder = _settings.ResolvedDownloadFolder;
-            var progress = new Progress<double>(value =>
-                _icon.Text = Truncate($"贴传 · 接收中 {value:P0}", 120));
-
-            foreach (var file in files)
-            {
-                await _phone.DownloadAsync(phone, file, folder, progress);
-            }
-            Notify($"已接收 {files.Count} 个文件", folder);
+            var count = await DownloadFilesAsync(phone, files);
+            Notify($"已接收 {count} 个文件", _settings.ResolvedDownloadFolder);
         }
         catch (Exception ex)
         {
@@ -280,6 +282,70 @@ public sealed class TrayContext : ApplicationContext
             _receiving = false;
             _receiveItem.Enabled = true;
             RefreshStatus();
+        }
+    }
+
+    /// <summary>
+    /// 下载给定文件并登记去重键，返回实际下载数量。
+    /// 抽出来供「手动接收」与「自动轮询」共用，避免两份下载循环。
+    /// </summary>
+    private async Task<int> DownloadFilesAsync(DiscoveredPhone phone, IReadOnlyList<RemoteFile> files)
+    {
+        var folder = _settings.ResolvedDownloadFolder;
+        var progress = new Progress<double>(value =>
+            _icon.Text = Truncate($"贴传 · 接收中 {value:P0}", 120));
+
+        var downloaded = 0;
+        foreach (var file in files)
+        {
+            await _phone.DownloadAsync(phone, file, folder, progress);
+            _received.Add(file.DedupKey);
+            downloaded++;
+        }
+        return downloaded;
+    }
+
+    /// <summary>
+    /// 轮询发件箱，只下载尚未接收过的新文件（静默，不打断用户）。
+    ///
+    /// 为什么必须有这一步：真实主流程是「手机碰标签 → 停在待上传页 → 再去选文件」，
+    /// 碰标签那一刻发件箱还是空的；只在「发现手机」时下载一次的话，
+    /// 用户随后选的文件永远不会被接收，表现为「碰了标签但文件没自动到电脑」。
+    /// </summary>
+    private async Task PollOutboxAsync()
+    {
+        if (_polling || _receiving || _exiting || !_settings.AutoDownloadOutbox)
+        {
+            return;
+        }
+        var phone = _discovery.Current;
+        if (phone is null)
+        {
+            return;
+        }
+        _polling = true;
+        try
+        {
+            var files = await _phone.ListOutboxAsync(phone);
+            var fresh = files.Where(f => !_received.Contains(f.DedupKey)).ToList();
+            if (fresh.Count == 0)
+            {
+                return;
+            }
+            var count = await DownloadFilesAsync(phone, fresh);
+            if (count > 0)
+            {
+                Log($"轮询下载 {count} 个新文件");
+                Notify($"已自动接收 {count} 个文件", _settings.ResolvedDownloadFolder);
+            }
+        }
+        catch
+        {
+            // 轮询失败静默：手机可能刚切后台/服务刚停，下一个 tick 会重试
+        }
+        finally
+        {
+            _polling = false;
         }
     }
 
@@ -392,8 +458,11 @@ public sealed class TrayContext : ApplicationContext
         }
     }
 
+    /// <summary>计划任务名（登录触发，延时 30 秒启动，避免开机瞬间抢资源）</summary>
+    private const string StartupTaskName = "贴传助手";
+
     /// <summary>
-    /// 首次运行/从旧版本升级：自动写入开机自启，用户无需手动操作。
+    /// 首次运行/从旧版本升级：自动写入登录自启，用户无需手动操作。
     /// 只执行一次；之后用户在菜单里取消，不会在下次启动时强行恢复。
     /// </summary>
     private void EnsureDefaultStartup()
@@ -406,30 +475,92 @@ public sealed class TrayContext : ApplicationContext
         _startupItem.Checked = IsStartupEnabled();
     }
 
-    /// <summary>写入/删除 HKCU Run；成功返回 true（失败不抛异常）</summary>
+    /// <summary>
+    /// 写入/删除**计划任务**（登录触发 + 延时 30 秒），成功返回 true。
+    ///
+    /// 为什么用计划任务而不是 HKCU\...\Run：
+    ///   · Run 键值 + 未签名 exe 是杀软/企业 EDR 判定「可疑自启动」最典型的组合，
+    ///     本机就发生过 EDR 把宿主程序整个隔离的事故；
+    ///   · 计划任务 `onlogon` 语义明确（登录后一次性触发，不是周期轮询），
+    ///     还能用 `/delay` 避开开机高峰，观感与行为都更接近正规软件。
+    ///   · 兼容既有安装：写入新任务的同时清掉历史 Run 键，避免开机被拉起两份。
+    /// </summary>
     private static bool SetStartup(bool enabled)
+    {
+        try
+        {
+            if (enabled)
+            {
+                var psi = new ProcessStartInfo("schtasks.exe")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                // /tr 里嵌了带空格的路径，schtasks 要求把内层引号转义成 \"
+                var command = StartupCommand().Replace("\"", "\\\"");
+                psi.ArgumentList.Add("/create");
+                psi.ArgumentList.Add("/tn");
+                psi.ArgumentList.Add(StartupTaskName);
+                psi.ArgumentList.Add("/tr");
+                psi.ArgumentList.Add(command);
+                psi.ArgumentList.Add("/sc");
+                psi.ArgumentList.Add("onlogon");
+                psi.ArgumentList.Add("/delay");
+                psi.ArgumentList.Add("0000:30");
+                psi.ArgumentList.Add("/f");
+                using var create = Process.Start(psi);
+                if (create is null)
+                {
+                    return false;
+                }
+                create.WaitForExit(15000);
+                if (create.ExitCode != 0)
+                {
+                    Log($"创建计划任务失败 code={create.ExitCode} {create.StandardError.ReadToEnd()}");
+                    return false;
+                }
+            }
+            else
+            {
+                var psi = new ProcessStartInfo("schtasks.exe")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                psi.ArgumentList.Add("/delete");
+                psi.ArgumentList.Add("/tn");
+                psi.ArgumentList.Add(StartupTaskName);
+                psi.ArgumentList.Add("/f");
+                using var del = Process.Start(psi);
+                del?.WaitForExit(15000);
+            }
+            // 无论开还是关，都顺手清掉历史 Run 键（旧版本会写，留着会重复拉起）
+            ClearLegacyRunEntry();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log("设置自启动失败 " + ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>清理旧版本写进 HKCU Run 的条目（含指向 Temp 的失效副本）</summary>
+    private static void ClearLegacyRunEntry()
     {
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(
                 @"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
-            if (key is null)
-            {
-                return false;
-            }
-            if (enabled)
-            {
-                key.SetValue("PengchuanTray", StartupCommand());
-            }
-            else
-            {
-                key.DeleteValue("PengchuanTray", throwOnMissingValue: false);
-            }
-            return true;
+            key?.DeleteValue("PengchuanTray", throwOnMissingValue: false);
         }
         catch
         {
-            return false;
+            // 清理失败不影响主流程
         }
     }
 
@@ -437,22 +568,37 @@ public sealed class TrayContext : ApplicationContext
     {
         if (!SetStartup(!IsStartupEnabled()))
         {
-            Notify("设置失败", "无法修改开机启动注册表项");
+            Notify("设置失败", "无法修改开机启动计划任务");
             return;
         }
         _settings.StartupDefaultApplied = true;
         _settings.Save();
         _startupItem.Checked = IsStartupEnabled();
-        Notify("贴传", _startupItem.Checked ? "已设置为开机自动启动" : "已取消开机自动启动");
+        Notify("贴传", _startupItem.Checked ? "已设置为登录后自动启动" : "已取消登录自动启动");
     }
 
+    /// <summary>是否已注册登录自启（以计划任务为准）</summary>
     private static bool IsStartupEnabled()
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(
-                @"Software\Microsoft\Windows\CurrentVersion\Run", writable: false);
-            return key?.GetValue("PengchuanTray") is not null;
+            var psi = new ProcessStartInfo("schtasks.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            psi.ArgumentList.Add("/query");
+            psi.ArgumentList.Add("/tn");
+            psi.ArgumentList.Add(StartupTaskName);
+            using var query = Process.Start(psi);
+            if (query is null)
+            {
+                return false;
+            }
+            query.WaitForExit(8000);
+            return query.ExitCode == 0;
         }
         catch
         {

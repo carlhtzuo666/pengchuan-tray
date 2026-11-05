@@ -1,0 +1,95 @@
+# SignPath Foundation 免费代码签名工作流
+#
+# 前置（一次性，在 SignPath.io 完成）：
+#   1. 申请通过后，SignPath.io 会给你一个 organization
+#   2. 在 SignPath.io 里建 Project → 绑定本仓库
+#   3. 建 Signing Policy（例如 release-signing），勾选「需要 Approver 手动批准」
+#   4. 建 Artifact Configuration（例如 pengchuan-tray），在其中声明：
+#        - 只允许签 PengchuanTray.exe
+#        - 元数据限制：Product name = 贴传助手 / PengchuanTray，
+#                      Product version 每次构建必须一致
+#   5. 生成 CI API Token，存到本仓库 Secrets：SIGNPATH_API_TOKEN
+#   6. 记录 Organization ID / Signing Policy Slug / Artifact Configuration Slug，
+#      填到下面的 vars（Settings → Variables）
+#
+# 注意：本工作流产出的 exe 由 SignPath.io 的 HSM 签名，证书签发主体是
+#       SignPath Foundation，因此发布者显示为 SignPath Foundation 而不是 ailinkfree。
+#
+# ⚠️ action 名称与输入参数以 SignPath 官方文档为准，首次运行前请核对：
+#    https://about.signpath.io/documentation/buildsystems/github-actions
+name: release-signpath
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号，例如 0.1.3'
+        required: true
+        type: string
+
+jobs:
+  build-unsigned:
+    name: 构建未签名产物
+    runs-on: windows-latest
+    # 把 artifact id 传给签名 job：跨 job 不能直接引用上一步的 steps.*
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # 关键：必须是「从本仓库源码可复现构建」的产物，
+      # SignPath 的签名即代表「这个二进制确实是这份源码构建出来的」。
+      - name: 自包含单文件发布
+        run: >
+          dotnet publish -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=None
+          -p:Version=${{ inputs.version }}
+          -o published
+
+      - name: 校验产物存在且带版本元数据
+        shell: pwsh
+        run: |
+          $exe = 'published/PengchuanTray.exe'
+          if (-not (Test-Path $exe)) { throw "构建产物缺失：$exe" }
+          $vi = (Get-Item $exe).VersionInfo
+          Write-Host "ProductName    : $($vi.ProductName)"
+          Write-Host "ProductVersion : $($vi.ProductVersion)"
+          Write-Host "FileVersion    : $($vi.FileVersion)"
+          if ([string]::IsNullOrWhiteSpace($vi.ProductVersion)) {
+            throw "缺少 ProductVersion 元数据，SignPath 的 metadata restrictions 会拒绝签名"
+          }
+
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: unsigned
+          path: published/PengchuanTray.exe
+
+  sign:
+    name: 提交 SignPath 签名
+    needs: build-unsigned
+    runs-on: ubuntu-latest
+    steps:
+      - name: 提交签名请求（需 Approver 在 SignPath.io 手动批准）
+        id: sign
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: pengchuan-tray
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_SLUG }}
+          github-artifact-id: ${{ needs.build-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed
+          path: signed/PengchuanTray.exe
