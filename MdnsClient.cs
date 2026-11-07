@@ -46,6 +46,28 @@ public sealed class MdnsClient : IDisposable
     /// <summary>诊断信息（--probe 输出，便于排查收不到应答的问题）</summary>
     public List<string> Diagnostics { get; } = new();
 
+    /// <summary>
+    /// 是否处于「5353 被占用 → 降级为单播查询」模式。
+    ///
+    /// 背景（本会话实测）：Windows 上 5353 常被系统 mDNS 服务或浏览器占用
+    /// （实测本机是 msedge 的 Cast/局域网发现占着 UDP 5353），
+    /// 即使自己设了 SO_REUSEADDR，也未必抢得过先绑定的一方。
+    /// 一旦绑定失败而异常被静默吞掉，症状就是「碰了标签电脑毫无反应」，
+    /// 且时好时坏（取决于谁先启动），极难排查。
+    ///
+    /// 降级方案依据 RFC 6762 §5.4：查询报文的问题段 CLASS 最高位（QU）置 1 时，
+    /// 响应方应改为**单播**回查询的源 IP:端口。这样即使我们没占到 5353，
+    /// 也能从临时端口收到应答。
+    /// </summary>
+    public bool IsUnicastFallback { get; private set; }
+
+    /// <summary>
+    /// 仅用于排查/自测：强制跳过 5353 绑定，直接走降级单播模式。
+    /// 由 <c>--force-unicast</c> 命令行开关设置，用来验证「5353 抢不到时」这条兜底路径
+    /// 是否真的能收到应答——否则这条路径只能在真实冲突场景下碰运气验证。
+    /// </summary>
+    public static bool ForceUnicastForTesting { get; set; }
+
     public void Start()
     {
         if (_socket is not null)
@@ -53,10 +75,60 @@ public sealed class MdnsClient : IDisposable
             return;
         }
 
-        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-        // Windows 上 5353 已被系统 mDNS 服务占用，必须允许复用端口
-        socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-        socket.Bind(new IPEndPoint(IPAddress.Any, 5353));
+        Socket? socket = null;
+        Exception? bindError = null;
+
+        // 先重试几次再去降级：占用方可能只是短时持有端口。
+        // 注意：只在启动阶段做这几次重试，不做周期轮询（避免长时间占资源）。
+        for (var attempt = 1; attempt <= 3 && socket is null; attempt++)
+        {
+            if (ForceUnicastForTesting)
+            {
+                bindError = new InvalidOperationException("强制单播模式（--force-unicast）");
+                break;
+            }
+            var candidate = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            try
+            {
+                candidate.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                candidate.Bind(new IPEndPoint(IPAddress.Any, 5353));
+                socket = candidate;
+                IsUnicastFallback = false;
+            }
+            catch (Exception ex)
+            {
+                bindError = ex;
+                candidate.Close();
+                if (attempt < 3)
+                {
+                    Thread.Sleep(800);
+                }
+            }
+        }
+
+        if (socket is null)
+        {
+            // 降级：绑系统分配的临时端口，查询报文置 QU 位让响应方单播回来
+            var fallback = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            fallback.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            fallback.Bind(new IPEndPoint(IPAddress.Any, 0));
+            socket = fallback;
+            IsUnicastFallback = true;
+            var localPort = ((IPEndPoint)socket.LocalEndPoint!).Port;
+            lock (_gate)
+            {
+                Diagnostics.Add(
+                    $"{DateTime.Now:HH:mm:ss.fff} 5353 被占用，已降级为单播查询（本地端口 {localPort}）。原因：{bindError?.Message}");
+            }
+        }
+        else
+        {
+            lock (_gate)
+            {
+                Diagnostics.Add($"{DateTime.Now:HH:mm:ss.fff} mDNS 已绑定 5353");
+            }
+        }
+
         socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, new MulticastOption(MulticastAddress));
 
         // 多网卡时逐个加入组播组（Wi-Fi 与有线同时存在）
@@ -98,10 +170,6 @@ public sealed class MdnsClient : IDisposable
         _socket = socket;
         _cts = new CancellationTokenSource();
         _ = Task.Run(() => ReceiveLoopAsync(_cts.Token));
-        lock (_gate)
-        {
-            Diagnostics.Add($"{DateTime.Now:HH:mm:ss.fff} mDNS socket 已就绪（5353 复用）");
-        }
     }
 
     /// <summary>发送一个查询（PTR 服务发现 / SRV+TXT 实例解析 / A 地址解析）</summary>
@@ -114,7 +182,7 @@ public sealed class MdnsClient : IDisposable
         }
         try
         {
-            var packet = BuildQuery(name, type);
+            var packet = BuildQuery(name, type, IsUnicastFallback);
             socket.SendTo(packet, new IPEndPoint(MulticastAddress, 5353));
         }
         catch (Exception ex)
@@ -173,7 +241,12 @@ public sealed class MdnsClient : IDisposable
 
     // ---------------- 查询报文构造 ----------------
 
-    private static byte[] BuildQuery(string name, ushort type)
+    /// <summary>
+    /// 构造查询报文。
+    /// <paramref name="unicastResponse"/> 为 true 时把问题段的 CLASS 最高位置 1（QU 位），
+    /// 请求响应方改用单播回复——这是 5353 绑定失败时的降级手段（RFC 6762 §5.4）。
+    /// </summary>
+    private static byte[] BuildQuery(string name, ushort type, bool unicastResponse = false)
     {
         using var stream = new MemoryStream();
         // 事务 ID 0（mDNS 惯例）、flags 0、QDCOUNT=1，其余 0
@@ -181,8 +254,9 @@ public sealed class MdnsClient : IDisposable
         WriteName(stream, name);
         stream.WriteByte((byte)(type >> 8));
         stream.WriteByte((byte)(type & 0xFF));
-        stream.WriteByte(0); // CLASS IN + 无 cache-flush 位
-        stream.WriteByte(1);
+        // CLASS 高字节：bit7 = QU（请求单播响应），其余位保持 0（无 cache-flush）
+        stream.WriteByte(unicastResponse ? (byte)0x80 : (byte)0x00);
+        stream.WriteByte(1); // CLASS = IN
         return stream.ToArray();
     }
 

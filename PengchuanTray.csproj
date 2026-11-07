@@ -9,7 +9,15 @@
   -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!--
+      目标框架带上 Windows SDK 版本（10.0.19041.0）：只有这样才能直接调用 WinRT API
+      （Package.Current / StartupTask / ApplicationData），用于 MSIX 形态下的
+      「登录自启」与「本地数据目录」判断。
+      该 TFM 产出的 exe 仍可脱离 MSIX 直接双击运行（免安装版形态）；
+      WinRT 调用在非打包环境会抛异常，代码里按形态分流即可。
+    -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

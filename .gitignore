@@ -35,3 +35,7 @@ Thumbs.db
 # 编辑器
 .idea/
 .vscode/
+
+# MSIX 打包中间产物与输出（二进制，不入库；源码 AppxManifest.xml 与 Assets 要入库）
+Package/stage/
+Package/output/

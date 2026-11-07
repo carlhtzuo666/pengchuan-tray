@@ -34,6 +34,8 @@ public sealed class PhoneDiscovery : IDisposable
 
     private readonly object _gate = new();
     private readonly MdnsClient _mdns = new();
+    /// <summary>自定义组播监听（方案 A）：5353 被占用时仍能发现手机</summary>
+    private readonly LanListener _lan = new();
     private readonly Dictionary<string, InstanceState> _instances = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _ownDiagnostics = new();
 
@@ -44,6 +46,15 @@ public sealed class PhoneDiscovery : IDisposable
     /// <summary>发现结果变化（null 表示手机已下线）</summary>
     public event Action<DiscoveredPhone?>? Changed;
 
+    /// <summary>
+    /// mDNS 是否已降级为「单播查询」模式。
+    ///
+    /// 为 true 说明 UDP 5353 被别的程序（系统 mDNS 服务、Edge 的局域网发现等）占用，
+    /// 我们没能绑上标准端口，只能改用临时端口 + QU 单播位查询。
+    /// 这种模式下发现可能变慢或漏设备，应当让用户/排查者能看到，而不是静默。
+    /// </summary>
+    public bool IsMdnsUnicastFallback => _mdns.IsUnicastFallback;
+
     /// <summary>诊断信息（--probe 写进 probe.json）</summary>
     public IReadOnlyList<string> Diagnostics
     {
@@ -53,6 +64,7 @@ public sealed class PhoneDiscovery : IDisposable
             {
                 var merged = new List<string>(_ownDiagnostics);
                 merged.AddRange(_mdns.Diagnostics);
+                merged.AddRange(_lan.Diagnostics);
                 return merged;
             }
         }
@@ -81,8 +93,41 @@ public sealed class PhoneDiscovery : IDisposable
         }
         _mdns.RecordsReceived += OnRecordsReceived;
         _mdns.Start();
+        // 并行启动自定义组播监听：mDNS 因 5353 被排他占用而失效时，
+        // 这条通道仍能发现手机（用户选定的方案 A）。
+        _lan.Announced += OnLanAnnounced;
+        _lan.Start();
         _cts = new CancellationTokenSource();
         _ = Task.Run(() => QueryLoopAsync(_cts.Token));
+    }
+
+    /// <summary>
+    /// 收到手机的自定义组播通告：直接构成一次完整发现（地址、端口、令牌都在包里），
+    /// 不需要再像 mDNS 那样补发 SRV/TXT 查询。
+    /// </summary>
+    private void OnLanAnnounced(LanAnnouncement announcement)
+    {
+        if (announcement.Port <= 0 || announcement.Token.Length == 0)
+        {
+            return;
+        }
+        var url = $"http://{announcement.Address}:{announcement.Port}/?t={announcement.Token}";
+        var phone = new DiscoveredPhone(announcement.Address, announcement.Port, announcement.Token, url);
+        lock (_gate)
+        {
+            var same = _current is not null &&
+                       _current.Host == phone.Host &&
+                       _current.Port == phone.Port &&
+                       _current.Token == phone.Token;
+            if (same)
+            {
+                // 同一手机重复通告：只刷新心跳，不重复触发 Changed（否则托盘会被反复唤醒）
+                _lastSeenUtc = DateTime.UtcNow;
+                return;
+            }
+            _ownDiagnostics.Add($"{DateTime.Now:HH:mm:ss.fff} 组播发现手机 {phone.Display}");
+            PublishLocked(phone);
+        }
     }
 
     /// <summary>主动再扫一次（托盘「立即扫描」/ --probe 用）</summary>
@@ -299,6 +344,8 @@ public sealed class PhoneDiscovery : IDisposable
         }
         _mdns.RecordsReceived -= OnRecordsReceived;
         _mdns.Dispose();
+        _lan.Announced -= OnLanAnnounced;
+        _lan.Dispose();
         _cts = null;
     }
 }

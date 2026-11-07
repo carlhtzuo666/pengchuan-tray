@@ -53,36 +53,71 @@ public sealed class AppSettings
             : DownloadFolder;
 
     /// <summary>
-    /// 默认下载目录：桌面\贴传。
-    /// 改名兼容：新目录尚未创建而旧目录（桌面\碰传share）已存在时继续沿用旧目录，
-    /// 避免老用户升级后找不到历史下载文件。
+    /// 默认下载目录。
+    ///
+    /// MSIX（Microsoft Store）形态走**系统「下载」文件夹**：
+    /// Store 应用装进 C:\Program Files\WindowsApps\，把文件写桌面既不符合商店应用习惯，
+    /// 也容易让审核觉得行为怪异；系统下载夹是用户对「下载」的默认预期位置。
+    ///
+    /// 免安装版沿用「桌面\贴传」：这是老用户已经习惯的位置，贸然改成下载夹会让
+    /// 升级后的用户找不到历史文件。改名兼容逻辑（新目录未建而旧目录存在时沿用旧目录）同样只对免安装版生效。
     /// </summary>
     private static string DefaultDownloadFolder()
     {
+        if (AppRuntime.IsPackaged)
+        {
+            var downloads = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+            Directory.CreateDirectory(downloads);
+            return downloads;
+        }
         var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
         var current = Path.Combine(desktop, "贴传");
         var legacy = Path.Combine(desktop, "碰传share");
         return !Directory.Exists(current) && Directory.Exists(legacy) ? legacy : current;
     }
 
-    private static string SettingsPath()
+    /// <summary>
+    /// 可写数据目录（配置与日志统一落这里）。
+    ///
+    /// 规则：程序同目录可写就用同目录（保持免安装版的「绿色」特性），
+    /// 否则回退到 %LOCALAPPDATA%\PengchuanTray。
+    ///
+    /// MSIX（Microsoft Store）形态下这套逻辑依然成立：系统的 AppData 虚拟化会把
+    /// %LOCALAPPDATA%\PengchuanTray 重定向到包私有目录
+    /// （%LOCALAPPDATA%\Packages\&lt;包族名&gt;\LocalCache\Local\PengchuanTray），
+    /// 所以**不需要为 Store 版单独写一套路径**。
+    ///
+    /// 为什么不能让日志继续写程序目录：MSIX 的安装目录
+    /// C:\Program Files\WindowsApps\... 是只读的，写入会直接抛异常
+    /// （本会话已实测确认该目录不可写）。
+    /// </summary>
+    private static string? _dataDirectory;
+
+    public static string DataDirectory()
     {
-        var besideExe = Path.Combine(AppContext.BaseDirectory, "settings.json");
+        if (_dataDirectory is not null)
+        {
+            return _dataDirectory;
+        }
         try
         {
             // 目录可写就用同目录，保持「绿色」
             var probe = Path.Combine(AppContext.BaseDirectory, ".write-test");
             File.WriteAllText(probe, "1");
             File.Delete(probe);
-            return besideExe;
+            _dataDirectory = AppContext.BaseDirectory;
         }
         catch
         {
             var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PengchuanTray");
             Directory.CreateDirectory(dir);
-            return Path.Combine(dir, "settings.json");
+            _dataDirectory = dir;
         }
+        return _dataDirectory;
     }
+
+    private static string SettingsPath() => Path.Combine(DataDirectory(), "settings.json");
 
     public static AppSettings Load()
     {

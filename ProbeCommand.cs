@@ -57,7 +57,8 @@ internal static class ProbeCommand
             diagnostics = discovery.Diagnostics,
             generatedAt = DateTimeOffset.Now.ToString("O")
         };
-        var path = Path.Combine(AppContext.BaseDirectory, "probe.json");
+        // 走 DataDirectory()：MSIX 只读安装目录下写不出来
+        var path = Path.Combine(AppSettings.DataDirectory(), "probe.json");
         File.WriteAllText(path, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
         Console.WriteLine(path);
         Console.WriteLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));

@@ -17,6 +17,18 @@ public sealed class TrayContext : ApplicationContext
 {
     private const string CloudPickupUrl = "https://share.ailinkfree.com/t/";
 
+    /// <summary>
+    /// 云端取件页的实际打开地址。
+    ///
+    /// MSIX（Microsoft Store）形态下追加 <c>?from=store</c>：网页检测到该参数会隐藏
+    /// 「从本站下载 Windows 客户端」区块，避免商店审核看到
+    /// 「商店应用引导用户去第三方站点下载客户端」而产生疑问。
+    /// 免安装版不带参数，网页表现完全不变。
+    /// </summary>
+    private static string CloudPickupPageUrl => AppRuntime.IsPackaged
+        ? CloudPickupUrl + "?from=store"
+        : CloudPickupUrl;
+
     private readonly NotifyIcon _icon;
     private readonly PhoneDiscovery _discovery = new();
     private readonly PhoneClient _phone = new();
@@ -78,7 +90,7 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add(_qrStickerItem);
         menu.Items.Add(_qrUniversalItem);
         menu.Items.Add(_qrListenItem);
-        menu.Items.Add(new ToolStripMenuItem("打开云端取件页", null, (_, _) => OpenUrl(CloudPickupUrl)));
+        menu.Items.Add(new ToolStripMenuItem("打开云端取件页", null, (_, _) => OpenUrl(CloudPickupPageUrl)));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_autoOpenItem);
         menu.Items.Add(_autoDownloadItem);
@@ -97,6 +109,11 @@ public sealed class TrayContext : ApplicationContext
 
         _discovery.Changed += OnPhoneChanged;
         _discovery.Start();
+        // 把 mDNS 是否降级写进日志：5353 被占用时发现能力会明显下降，
+        // 这是「碰了标签电脑没反应」的常见原因之一，必须可见而不是静默。
+        Log(_discovery.IsMdnsUnicastFallback
+            ? "mDNS 降级：5353 被其它程序占用，已改用单播查询（发现可能变慢或漏设备）"
+            : "mDNS 正常：已绑定 5353");
         // 首次运行/升级：自动注册**登录自启**（计划任务，不是 Run 键）。
         // 必须常驻才能实现「手机碰标签 → 电脑自动收文件」：NFC 由手机读，电脑侧
         // 没有 NFC 通路，不常驻就永远发现不了手机。用户之后可在菜单里取消。
@@ -187,7 +204,7 @@ public sealed class TrayContext : ApplicationContext
                 {
                     _openedCloudToken = phone.Token;
                     Log("局域网不可达，打开云端取件页");
-                    OpenUrl(CloudPickupUrl);
+                    OpenUrl(CloudPickupPageUrl);
                     Notify("已打开云端取件页",
                         $"手机 {phone.Display} 与电脑不在同一网络，局域网直连不可用。" +
                         "请在手机上点「改走云端上传」，文件会出现在该页面里。");
@@ -249,7 +266,7 @@ public sealed class TrayContext : ApplicationContext
         {
             if (_settings.FallbackToCloudPage)
             {
-                OpenUrl(CloudPickupUrl);
+                OpenUrl(CloudPickupPageUrl);
                 Notify("未发现局域网手机", "已打开云端取件页：手机走云端上传后，这里登录同账号即可下载");
             }
             else
@@ -263,7 +280,9 @@ public sealed class TrayContext : ApplicationContext
         _receiveItem.Enabled = false;
         try
         {
+            Log($"接收开始：{phone.Display}，下载目录 {_settings.ResolvedDownloadFolder}");
             var files = await _phone.ListOutboxAsync(phone);
+            Log($"发件箱列表：{files.Count} 个文件");
             if (files.Count == 0)
             {
                 Notify("手机发件箱是空的", "请在手机上点「选择文件」，再回来接收");
@@ -271,10 +290,14 @@ public sealed class TrayContext : ApplicationContext
             }
 
             var count = await DownloadFilesAsync(phone, files);
+            Log($"接收完成：{count} 个文件");
             Notify($"已接收 {count} 个文件", _settings.ResolvedDownloadFolder);
         }
         catch (Exception ex)
         {
+            // 必须落日志：MSIX（Store）形态下没有控制台，静默吞掉异常会让
+            // 「碰了标签但文件没到」完全无法排查。
+            Log($"接收失败：{ex.GetType().Name}: {ex.Message}");
             Notify("接收失败", ex.Message);
         }
         finally
@@ -487,6 +510,13 @@ public sealed class TrayContext : ApplicationContext
     /// </summary>
     private static bool SetStartup(bool enabled)
     {
+        // MSIX（Microsoft Store）形态：登录自启由包清单声明的 startupTask 扩展负责。
+        // 沙箱内注册 schtasks 计划任务会被 Store 审核拒绝，因此这里必须分流，
+        // 不能沿用免安装版的计划任务写法。
+        if (AppRuntime.IsPackaged)
+        {
+            return SetStartupPackaged(enabled);
+        }
         try
         {
             if (enabled)
@@ -568,18 +598,38 @@ public sealed class TrayContext : ApplicationContext
     {
         if (!SetStartup(!IsStartupEnabled()))
         {
-            Notify("设置失败", "无法修改开机启动计划任务");
+            if (AppRuntime.IsPackaged)
+            {
+                // MSIX 形态下最常见的原因：用户已在任务管理器里禁用了启动项，
+                // 此时程序无权强行恢复，只能如实告知并指路。
+                Notify("无法修改自启", StartupStateText(GetStartupStatePackaged()));
+            }
+            else
+            {
+                Notify("设置失败", "无法修改开机启动计划任务");
+            }
             return;
         }
         _settings.StartupDefaultApplied = true;
         _settings.Save();
         _startupItem.Checked = IsStartupEnabled();
-        Notify("贴传", _startupItem.Checked ? "已设置为登录后自动启动" : "已取消登录自动启动");
+        if (AppRuntime.IsPackaged)
+        {
+            Notify("贴传", $"登录自启：{StartupStateText(GetStartupStatePackaged())}");
+        }
+        else
+        {
+            Notify("贴传", _startupItem.Checked ? "已设置为登录后自动启动" : "已取消登录自动启动");
+        }
     }
 
-    /// <summary>是否已注册登录自启（以计划任务为准）</summary>
+    /// <summary>是否已注册登录自启（MSIX 形态看 startupTask，免安装版看计划任务）</summary>
     private static bool IsStartupEnabled()
     {
+        if (AppRuntime.IsPackaged)
+        {
+            return GetStartupStatePackaged() == Windows.ApplicationModel.StartupTaskState.Enabled;
+        }
         try
         {
             var psi = new ProcessStartInfo("schtasks.exe")
@@ -604,6 +654,78 @@ public sealed class TrayContext : ApplicationContext
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// MSIX 形态：用包清单里声明的 startupTask 控制登录自启。
+    ///
+    /// 必须尊重的三个平台限制（官方文档明确写了，会直接影响 UX）：
+    ///   1. 用户必须手动启动过本应用至少一次，该 startupTask 才会注册；
+    ///   2. 用户可在任务管理器「启动」标签里自行禁用；
+    ///   3. 一旦被用户禁用（DisabledByUser），程序**无法**用代码强行恢复，
+    ///      只能引导用户自己去任务管理器打开——不要试图绕过，那既做不到也不合规。
+    ///
+    /// WinRT 的 StartupTask API 是异步的，而菜单回调是同步的，
+    /// 这里用 Task.Run 包一层再同步等待，避免在 UI 线程上直接等 IAsyncOperation 造成死锁。
+    /// </summary>
+    private static bool SetStartupPackaged(bool enabled)
+    {
+        try
+        {
+            var work = Task.Run(async () =>
+            {
+                var task = await Windows.ApplicationModel.StartupTask.GetAsync(AppRuntime.StartupTaskId);
+                if (enabled)
+                {
+                    var state = await task.RequestEnableAsync();
+                    return state == Windows.ApplicationModel.StartupTaskState.Enabled;
+                }
+                task.Disable();
+                return task.State != Windows.ApplicationModel.StartupTaskState.Enabled;
+            });
+            return work.Wait(TimeSpan.FromSeconds(8)) && work.Result;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>MSIX 形态下查询 startupTask 当前状态（可能被用户或策略禁用）</summary>
+    private static Windows.ApplicationModel.StartupTaskState? GetStartupStatePackaged()
+    {
+        try
+        {
+            var work = Task.Run(async () =>
+            {
+                var task = await Windows.ApplicationModel.StartupTask.GetAsync(AppRuntime.StartupTaskId);
+                return task.State;
+            });
+            return work.Wait(TimeSpan.FromSeconds(8)) ? work.Result : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>MSIX 形态下把 startupTask 状态翻译成给用户看的中文说明</summary>
+    private static string StartupStateText(Windows.ApplicationModel.StartupTaskState? state)
+    {
+        if (state is null)
+        {
+            return "状态未知";
+        }
+        return state switch
+        {
+            Windows.ApplicationModel.StartupTaskState.Enabled => "已开启",
+            Windows.ApplicationModel.StartupTaskState.Disabled => "未开启",
+            Windows.ApplicationModel.StartupTaskState.DisabledByUser =>
+                "已被你在任务管理器中关闭，需到「任务管理器 → 启动」里重新打开",
+            Windows.ApplicationModel.StartupTaskState.DisabledByPolicy => "已被系统策略禁用",
+            Windows.ApplicationModel.StartupTaskState.EnabledByPolicy => "已由系统策略开启",
+            _ => state.ToString() ?? "状态未知",
+        };
     }
 
     /// <summary>开机启动命令：用 dotnet 主机加载 DLL，避免 Smart App Control 拦截未签名 exe</summary>
@@ -649,8 +771,9 @@ public sealed class TrayContext : ApplicationContext
     {
         try
         {
+            // 与 Program.Log 一致：走 DataDirectory()，兼容 MSIX 只读安装目录
             File.AppendAllText(
-                Path.Combine(AppContext.BaseDirectory, "tray.log"),
+                Path.Combine(AppSettings.DataDirectory(), "tray.log"),
                 $"{DateTime.Now:HH:mm:ss.fff} {message}{Environment.NewLine}");
         }
         catch
