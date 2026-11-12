@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -16,6 +17,11 @@ namespace PengchuanTray;
 public sealed class TrayContext : ApplicationContext
 {
     private const string CloudPickupUrl = "https://share.ailinkfree.com/t/";
+    /// <summary>
+    /// 文件投递时，若发件箱里没有「未接收过」的新文件（自动接收已全部拉过），
+    /// 最多回溯投递最近这么多个，避免用户的「发送文件」操作静默无响应。
+    /// </summary>
+    private const int FileDeliverFallbackCount = 3;
 
     /// <summary>
     /// 云端取件页的实际打开地址。
@@ -33,7 +39,15 @@ public sealed class TrayContext : ApplicationContext
     private readonly PhoneDiscovery _discovery = new();
     private readonly PhoneClient _phone = new();
     private readonly AppSettings _settings = AppSettings.Load();
-    private readonly System.Windows.Forms.Timer _ticker = new() { Interval = 5000 };
+    /// <summary>
+    /// 主定时器。默认 2000ms（省电、够用）；实时同步输入开启后提到 500ms，
+    /// 让「手机打字 → 电脑出现」的延迟压到感知不到的范围内。
+    /// </summary>
+    private readonly System.Windows.Forms.Timer _ticker = new() { Interval = NormalPollMs };
+    /// <summary>常规轮询间隔（毫秒）</summary>
+    private const int NormalPollMs = 2000;
+    /// <summary>实时同步输入开启时的轮询间隔（毫秒）</summary>
+    private const int RealtimePollMs = 500;
 
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _openLanItem;
@@ -44,6 +58,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _qrStickerItem;
     private readonly ToolStripMenuItem _qrUniversalItem;
     private readonly ToolStripMenuItem _qrListenItem;
+    private readonly ToolStripMenuItem _autoClipItem;
     private readonly QrOfferClient _qrClient = new();
 
     private string? _openedToken;
@@ -55,8 +70,27 @@ public sealed class TrayContext : ApplicationContext
     private readonly object _openGate = new();
     /** 已下载过的文件去重键（名字|大小|时间）；重启托盘会重新收一遍，但不会覆盖已有同名文件 */
     private readonly HashSet<string> _received = new();
-    /** 轮询发件箱进行中标志：避免 5 秒定时器重入并发下载同一批文件 */
+    /** 轮询发件箱进行中标志：避免 2 秒定时器重入并发下载同一批文件 */
     private bool _polling;
+    /** 已处理的最大文字 id：按 id 去重，避免同一条反复写剪贴板 */
+    private long _lastClipId;
+    /**
+     * 上次轮询所用手机的令牌。
+     * 手机端应用重启会换新令牌并重置文字 id 序列，此时必须把 _lastClipId 归零，
+     * 否则旧的大 id 会把新文字永久判为「已处理」（真机实测复现过该故障）。
+     */
+    private string? _clipToken;
+    /** 轮询文字传输进行中标志：与文件下载互不阻塞（下载大文件可能耗时数分钟） */
+    private bool _clipPolling;
+    /**
+     * 实时同步模式下「电脑端当前已注入的文字」。
+     * 每收到新内容时与它做差分：新增部分补键入、变短部分补退格，
+     * 实现手机删字符时电脑同步删（真镜像），而不是每次整段重打。
+     * 手动点「发送」的常规路径不使用它。
+     */
+    private string _lastTypedText = string.Empty;
+    /** 实时同步菜单项（勾选状态反映 _settings.RealtimeSync） */
+    private readonly ToolStripMenuItem _realtimeItem;
 
     public TrayContext()
     {
@@ -81,6 +115,15 @@ public sealed class TrayContext : ApplicationContext
         {
             Checked = _settings.QrListenEnabled
         };
+        _autoClipItem = new ToolStripMenuItem("自动接收手机文字到剪贴板", null, (_, _) => ToggleAutoClip())
+        {
+            Checked = _settings.AutoReceiveClip
+        };
+        // 实时同步输入：手机打字停顿约 300ms 就推送，电脑差分注入（含退格镜像）
+        _realtimeItem = new ToolStripMenuItem("实时同步输入（边打边传）", null, (_, _) => ToggleRealtimeSync())
+        {
+            Checked = _settings.RealtimeSync
+        };
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
@@ -94,6 +137,8 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_autoOpenItem);
         menu.Items.Add(_autoDownloadItem);
+        menu.Items.Add(_autoClipItem);
+        menu.Items.Add(_realtimeItem);
         menu.Items.Add(_startupItem);
         menu.Items.Add(new ToolStripMenuItem("打开下载文件夹", null, (_, _) => OpenFolder(_settings.ResolvedDownloadFolder)));
         menu.Items.Add(new ToolStripSeparator());
@@ -131,9 +176,14 @@ public sealed class TrayContext : ApplicationContext
             _ = CheckQrOfferAsync();
             // 持续轮询发件箱：只靠「发现手机」那一次下载会漏掉真正的主流程——
             // 用户碰完标签才去选文件，那时发件箱还是空的，之后就永远不下。
-            // 这里每 5 秒补一次，只下载没见过的文件（按名字+大小+时间戳去重）。
+            // 这里每 2 秒补一次，只下载没见过的文件（按名字+大小+时间戳去重）。
             _ = PollOutboxAsync();
+            // 文字传输与文件下载独立：大文件下载可能耗时数分钟，不能饿死低延迟的文字接收。
+            _ = PollClipAsync();
         };
+        // 启动时按持久化的「实时同步输入」开关决定轮询节奏：
+        // 开启则 500ms（打字要跟手），关闭则 2000ms（省电，点发送才传）。
+        _ticker.Interval = _settings.RealtimeSync ? RealtimePollMs : NormalPollMs;
         _ticker.Start();
         RefreshStatus();
     }
@@ -371,6 +421,277 @@ public sealed class TrayContext : ApplicationContext
             _polling = false;
         }
     }
+
+    /// <summary>
+    /// 轮询手机最新文字，按 id 去重后写入系统剪贴板。
+    /// 与 PollOutboxAsync 独立：文件下载可能耗时数分钟，不能阻塞低延迟的文字传输。
+    ///
+    /// 线程说明：Tick 在 UI（STA）线程触发，await 默认回到同一线程，
+    /// 因此可直接调用 WinForms 的 Clipboard。**切勿加 ConfigureAwait(false)**，
+    /// 否则 continuation 落到非 STA 线程池，写剪贴板会抛 ThreadStateException。
+    ///
+    /// 隐私：只记录 id，绝不把文字内容写进日志（可能是密码/验证码）。
+    /// </summary>
+    private async Task PollClipAsync()
+    {
+        if (_clipPolling || _exiting || !_settings.AutoReceiveClip)
+        {
+            return;
+        }
+        var phone = _discovery.Current;
+        if (phone is null)
+        {
+            return;
+        }
+        _clipPolling = true;
+        try
+        {
+            // 令牌变化 = 手机端应用重启过，其文字 id 序列已重置，这里同步归零
+            if (_clipToken != phone.Token)
+            {
+                _clipToken = phone.Token;
+                _lastClipId = 0;
+            }
+            var clip = await _phone.GetLatestClipAsync(phone, _lastClipId);
+            if (clip is null || clip.Id <= _lastClipId)
+            {
+                return;
+            }
+            // 先登记 id 再处理：即使 ack 失败也不会同一条反复注入
+            _lastClipId = clip.Id;
+            var target = TextInjector.IsSupported ? TextInjector.DescribeForegroundWindow() : "(非 Windows)";
+            // 实时同步输入：手机端每次打字停顿都推一条「当前完整文本」，
+            // 这里与「电脑端已注入的文本」做差分，只补差异部分（含退格删除），
+            // 避免每次整段重打导致重复堆叠。纯回车/文件投递仍走下面的常规分支。
+            if (_settings.RealtimeSync && clip.Enter == false && clip.FileDeliver == false
+                && TextInjector.IsSupported && _settings.IsClipInjectMode)
+            {
+                ApplyRealtimeDiff(clip.Text, target);
+                await _phone.AckClipAsync(phone, clip.Id);
+                return;
+            }
+            if (clip.Text.Length == 0)
+            {
+                // 纯回车事件（手机「Enter」按钮）：不动剪贴板、不动输入框内容，只按一次回车
+                if (clip.Enter && TextInjector.IsSupported)
+                {
+                    var sent = TextInjector.PressEnter();
+                    Notify(sent ? "已发送回车" : "回车发送被系统拦截", sent ? "等同在电脑上按 Enter" : "请手动按 Enter");
+                    Log($"已接收回车 id={clip.Id} ok={sent} target=[{target}]");
+                }
+            }
+            else
+            {
+                Clipboard.SetDataObject(clip.Text, true);
+                // 投递方式以「手机端下拉框」为准（每条消息自带 mode）；
+                // 旧版手机不下发时回退到本地默认设置，保证兼容。
+                var inject = clip.Mode.Length > 0
+                    ? clip.Mode != AppSettings.ClipModeClipboard
+                    : _settings.IsClipInjectMode;
+                // 文字一律先写剪贴板（注入失败或用户想手动粘贴时都靠它兜底）。
+                if (TextInjector.IsSupported && inject)
+                {
+                    // Unicode 逐字符键入，不用 Ctrl+V：
+                    // 实测无扫描码的 Ctrl+V 会被目标应用静默忽略（SendInput 仍返回成功）；
+                    // Unicode 通道不依赖剪贴板与组合键，最稳。
+                    var typed = TextInjector.TypeText(clip.Text);
+                    var entered = !clip.Enter || TextInjector.PressEnter();
+                    if (typed && entered)
+                    {
+                        Notify(clip.Enter ? "已输入并回车" : "文字已输入到当前输入框",
+                            clip.Enter ? "已键入并回车发出" : "已键入，可继续编辑");
+                        Log($"已接收文字 id={clip.Id} enter={clip.Enter} 键入成功 target=[{target}]");
+                    }
+                    else
+                    {
+                        // 常见原因：目标窗口以管理员权限运行（UIPI 禁止低权限进程注入），
+                        // 或当时没有输入框获得焦点。文字已在剪贴板，手动粘贴即可。
+                        Notify("已复制，但自动输入被系统拦截",
+                            "目标窗口可能以管理员权限运行，请手动 Ctrl+V 粘贴");
+                        Log($"已接收文字 id={clip.Id} enter={clip.Enter} 键入失败 typed={typed} entered={entered} target=[{target}]");
+                    }
+                }
+                else
+                {
+                    // 「只复制到剪贴板」模式：不碰焦点输入框，交给用户自己 Ctrl+V
+                    Notify("文字已复制到剪贴板", "可直接 Ctrl+V 粘贴到任意位置");
+                    Log($"已接收文字 id={clip.Id} 模式=剪贴板 target=[{target}]");
+                }
+            }
+            // 文件投递：手机端选完附件点「发送」→ 把这一批新文件下载后直接粘贴进当前输入框。
+            // 放在 ack 之前执行，投递结果（成功/降级）能一并告知用户。
+            if (clip.FileDeliver)
+            {
+                await DeliverFilesAsync(phone, clip.FileNames);
+            }
+            await _phone.AckClipAsync(phone, clip.Id);
+        }
+        catch
+        {
+            // 轮询失败静默：手机可能刚切后台/服务刚停，下一个 tick 会重试
+        }
+        finally
+        {
+            _clipPolling = false;
+        }
+    }
+
+    /// <summary>
+    /// 把手机端刚发来的文件投递到电脑当前焦点输入框。
+    ///
+    /// 流程：列发件箱 → 只挑尚未接收过的新文件 → 下载到下载目录
+    /// → 写文件剪贴板（CF_HDROP，等价资源管理器复制文件）→ Ctrl+V 粘贴。
+    ///
+    /// 失败降级：微信 PC、普通网页 &lt;input type=file&gt; 不接受粘贴文件，
+    /// 此时在资源管理器里选中文件，让用户手动拖入——这是唯一稳妥的手动方式。
+    /// </summary>
+    private async Task DeliverFilesAsync(DiscoveredPhone phone, string[] clipFileNames)
+    {
+        if (!FileInjector.IsSupported)
+        {
+            return;
+        }
+        IReadOnlyList<RemoteFile> all;
+        try
+        {
+            all = await _phone.ListOutboxAsync(phone);
+        }
+        catch
+        {
+            // 列发件箱失败：手机可能刚切后台，交给下一轮
+            return;
+        }
+        if (all.Count == 0)
+        {
+            return;
+        }
+        // 精确投递：手机端会把本次选中的文件名列表一起下发，只投这些文件。
+        // 旧版手机不下发列表时（clipFileNames 为空）才回退到「最近修改的几个」。
+        List<RemoteFile> candidates;
+        if (clipFileNames.Length > 0)
+        {
+            var wanted = new HashSet<string>(clipFileNames, StringComparer.OrdinalIgnoreCase);
+            candidates = all.Where(f => wanted.Contains(f.Name)).ToList();
+            if (candidates.Count == 0)
+            {
+                // 名字对不上（手机刚改名、发件箱尚未刷新）：退回兜底，避免用户操作静默无响应
+                Log($"投递名单 {clipFileNames.Length} 个在发件箱未找到，改用最近文件兜底");
+                candidates = all.OrderByDescending(f => f.Mtime).Take(FileDeliverFallbackCount).ToList();
+            }
+        }
+        else
+        {
+            var fresh = new List<RemoteFile>();
+            foreach (var f in all)
+            {
+                if (!_received.Contains(f.DedupKey))
+                {
+                    fresh.Add(f);
+                }
+            }
+            candidates = fresh.Count > 0
+                ? fresh
+                : all.OrderByDescending(f => f.Mtime).Take(FileDeliverFallbackCount).ToList();
+        }
+        var folder = _settings.ResolvedDownloadFolder;
+        var saved = new List<string>();
+        foreach (var f in candidates)
+        {
+            try
+            {
+                var path = await _phone.DownloadAsync(phone, f, folder);
+                _received.Add(f.DedupKey);
+                saved.Add(path);
+            }
+            catch (Exception ex)
+            {
+                Log($"投递文件下载失败 name={f.Name} err={ex.Message}");
+            }
+        }
+        if (saved.Count == 0)
+        {
+            return;
+        }
+        var target = TextInjector.DescribeForegroundWindow();
+        var pasted = FileInjector.PasteFiles(saved.ToArray());
+        if (pasted)
+        {
+            Notify($"已投递 {saved.Count} 个文件", "已粘贴到当前输入框；若没出现，请手动拖入");
+            Log($"文件投递 id 完成 count={saved.Count} 已粘贴 target=[{target}]");
+        }
+        else
+        {
+            // 降级：目标不接受粘贴文件（微信/网页常见），定位文件让用户拖
+            FileInjector.RevealInExplorer(saved.ToArray());
+            Notify($"已下载 {saved.Count} 个文件", "目标输入框不支持粘贴文件，请在资源管理器中拖入");
+            Log($"文件投递 count={saved.Count} 粘贴失败已降级 target=[{target}]");
+        }
+    }
+
+    /// <summary>
+    /// 实时同步的差分注入：把「手机当前完整文本」与「电脑已注入文本」比较，
+    /// 只补发差异 —— 变短则连发退格删掉多出的字符，变长则键入新增部分。
+    ///
+    /// 为什么必须做差分：手机端每次推送的是输入框「完整内容」。
+    /// 若每次都整段键入，电脑上会变成「你好你好你好」这样的重复堆叠；
+    /// 做差分后才是真正的镜像效果（打字即出现、删字即消失）。
+    /// </summary>
+    private void ApplyRealtimeDiff(string text, string target)
+    {
+        if (text == _lastTypedText)
+        {
+            return;
+        }
+        // 找出公共前缀长度：这部分电脑上已经有了，不需要动
+        var prefix = 0;
+        var maxPrefix = Math.Min(text.Length, _lastTypedText.Length);
+        while (prefix < maxPrefix && text[prefix] == _lastTypedText[prefix])
+        {
+            prefix++;
+        }
+        // 需要删掉电脑上多出来的字符数（手机端变短或中间回改时产生）
+        var toDelete = _lastTypedText.Length - prefix;
+        if (toDelete > 0)
+        {
+            TextInjector.PressBackspace(toDelete);
+        }
+        // 需要补键入的新增部分
+        var toAppend = text.Substring(prefix);
+        if (toAppend.Length > 0)
+        {
+            TextInjector.TypeText(toAppend);
+        }
+        _lastTypedText = text;
+        Log($"实时同步 差分 prefix={prefix} del={toDelete} add={toAppend.Length} target=[{target}]");
+    }
+
+    private void ToggleAutoClip()
+    {
+        _settings.AutoReceiveClip = !_settings.AutoReceiveClip;
+        _autoClipItem.Checked = _settings.AutoReceiveClip;
+        _settings.Save();
+    }
+
+    /// <summary>
+    /// 切换「实时同步输入（边打边传）」。
+    /// 打开后：手机端打字停顿约 300ms 自动推送；电脑端轮询提速到 500ms，
+    /// 并对内容做差分注入（新增补键入、删除补退格），实现真正的镜像。
+    /// 关闭后恢复 2 秒轮询与「点发送才传」的常规模式。
+    /// </summary>
+    private void ToggleRealtimeSync()
+    {
+        _settings.RealtimeSync = !_settings.RealtimeSync;
+        _realtimeItem.Checked = _settings.RealtimeSync;
+        _settings.Save();
+        // 立即生效，不必重启：定时器间隔按开关切换
+        _ticker.Interval = _settings.RealtimeSync ? RealtimePollMs : NormalPollMs;
+        // 切换模式时清空差分基线：避免上一次会话的残留内容与新文本算错差分
+        _lastTypedText = string.Empty;
+        Notify(_settings.RealtimeSync ? "已开启实时同步输入" : "已关闭实时同步输入",
+            _settings.RealtimeSync ? "手机打字会实时出现在电脑当前输入框" : "恢复为点「发送」才传");
+        Log($"实时同步输入 -> {_settings.RealtimeSync} 轮询={_ticker.Interval}ms");
+    }
+
 
     private void ToggleAutoOpen()
     {

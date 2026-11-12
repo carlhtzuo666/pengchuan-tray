@@ -35,6 +35,35 @@ public sealed class AppSettings
     public bool AutoDownloadOutbox { get; set; } = true;
 
     /// <summary>
+    /// 是否自动接收手机发来的文字并写入系统剪贴板（默认开启）。
+    /// 老配置无此键时反序列化保留属性初始化器的 true，无需 bump SettingsVersion。
+    /// </summary>
+    public bool AutoReceiveClip { get; set; } = true;
+
+    /// <summary>文字投递方式：注入到当前输入框（默认）</summary>
+    public const string ClipModeInject = "inject";
+
+    /// <summary>文字投递方式：只复制到系统剪贴板</summary>
+    public const string ClipModeClipboard = "clipboard";
+
+    /// <summary>
+    /// 手机文字到达电脑后的处理方式：
+    /// <c>inject</c>（默认）= 键入当前焦点输入框；<c>clipboard</c> = 只写剪贴板。
+    /// 老配置无此键时保留初始化器默认值，无需 bump SettingsVersion。
+    /// </summary>
+    public string ClipDeliveryMode { get; set; } = ClipModeInject;
+
+    /// <summary>当前是否为「注入到输入框」模式</summary>
+    public bool IsClipInjectMode => ClipDeliveryMode != ClipModeClipboard;
+
+    /// <summary>
+    /// 实时同步输入（边打边传）：手机端打字停顿约 300ms 就推送，电脑端做差分注入，
+    /// 包括按退格镜像删除。默认关闭——这会把输入中的草稿也实时送到电脑，
+    /// 属于需要用户主动选择的高打扰模式。老配置无此键时保留默认 false。
+    /// </summary>
+    public bool RealtimeSync { get; set; }
+
+    /// <summary>
     /// 是否已经应用过「默认开机自启」。
     /// 首次运行/从旧版本升级时自动写入 HKCU Run；之后用户手动取消则不再强行恢复。
     /// </summary>

@@ -13,6 +13,13 @@ public sealed record RemoteFile(string Name, string Url, long Size = 0, long Mti
 }
 
 /// <summary>
+/// 手机端发来的一条文字（手机端 <c>/api/clip/latest</c> 返回）。
+/// Id 单调递增，电脑端按 Id 去重，避免同一条反复写入剪贴板。
+/// Enter=true 表示手机端点了「发送」，电脑端送达文字后还要按一次回车。
+/// </summary>
+public sealed record RemoteClip(long Id, string Text, bool Enter, string Mode, bool FileDeliver, string[] FileNames);
+
+/// <summary>
 /// 手机局域网服务客户端：只读发件箱 + 流式下载（带 Range 语义的服务端，这里先整文件流式拷贝）。
 /// 令牌走查询参数 <c>?t=</c>（与手机端 <c>authorized()</c> 兼容），不写日志。
 /// </summary>
@@ -29,6 +36,66 @@ public sealed class PhoneClient : IDisposable
     /// <summary>手机「接收目录」列表（电脑→手机方向上传的文件，自检/排查用）</summary>
     public async Task<IReadOnlyList<RemoteFile>> ListDavAsync(DiscoveredPhone phone, CancellationToken ct = default)
         => await ListAsync(phone, "/api/dav/list", ct);
+
+    /// <summary>
+    /// 拉取最新一条「未送达」文字。
+    /// 手机端在无新内容时返回 204 空响应，这里必须显式判空——
+    /// 直接 JsonDocument.Parse 空串会抛异常，被轮询的空 catch 吞掉后完全看不到原因。
+    /// </summary>
+    public async Task<RemoteClip?> GetLatestClipAsync(DiscoveredPhone phone, long sinceId, CancellationToken ct = default)
+    {
+        var url = $"http://{phone.Host}:{phone.Port}/api/clip/latest"
+                + $"?t={Uri.EscapeDataString(phone.Token)}&since={sinceId}";
+        var json = await _http.GetStringAsync(url, ct);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (!root.TryGetProperty("id", out var idEl) || !idEl.TryGetInt64(out var id))
+        {
+            return null;
+        }
+        var text = root.TryGetProperty("text", out var t) ? t.GetString() ?? string.Empty : string.Empty;
+        // enter 缺省按 false 处理：老版本手机端不下发该字段时保持「只复制」的原有行为
+        var enter = root.TryGetProperty("enter", out var e) && e.ValueKind == JsonValueKind.True;
+        // 投递方式由手机端逐条下发；旧版手机不带该字段时留空，由调用方回退到本地默认
+        var mode = root.TryGetProperty("mode", out var m) && m.ValueKind == JsonValueKind.String
+            ? m.GetString() ?? string.Empty
+            : string.Empty;
+        // fileDeliver=true：本批新文件要投递到当前焦点输入框（写文件剪贴板 + 粘贴），
+        // 而不是只保存到下载目录
+        var fileDeliver = root.TryGetProperty("fileDeliver", out var fd) && fd.ValueKind == JsonValueKind.True;
+        // 本次要投递的文件名列表（精确投递用）：手机端下发，缺失时为空数组
+        var names = new List<string>();
+        if (root.TryGetProperty("fileNames", out var fn) && fn.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var one in fn.EnumerateArray())
+            {
+                if (one.ValueKind == JsonValueKind.String)
+                {
+                    var s = one.GetString();
+                    if (!string.IsNullOrWhiteSpace(s)) { names.Add(s); }
+                }
+            }
+        }
+        return new RemoteClip(id, text, enter, mode, fileDeliver, names.ToArray());
+    }
+
+    /// <summary>
+    /// 确认已写入剪贴板。
+    /// 手机端 ack 只标记 delivered、不删除记录，因此重发/回看仍可用。
+    /// 用 POST + JSON 载荷，与手机端 pushClip/ackClip 的解码方式一致。
+    /// </summary>
+    public async Task AckClipAsync(DiscoveredPhone phone, long id, CancellationToken ct = default)
+    {
+        var url = $"http://{phone.Host}:{phone.Port}/api/clip/ack?t={Uri.EscapeDataString(phone.Token)}";
+        var payload = JsonSerializer.Serialize(new { text = id.ToString() });
+        using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+        using var response = await _http.PostAsync(url, content, ct);
+        response.EnsureSuccessStatusCode();
+    }
 
     /// <summary>
     /// 快速探测手机局域网服务是否真的可用（token 是否有效、端口是否在听）。

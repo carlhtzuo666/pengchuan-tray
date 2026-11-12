@@ -34,10 +34,10 @@
     <Copyright>Copyright (c) 2026 ailinkfree</Copyright>
     <NeutralLanguage>zh-Hans</NeutralLanguage>
     <RepositoryUrl>https://github.com/carlhtzuo666/pengchuan-tray</RepositoryUrl>
-    <Version>0.1.3</Version>
-    <AssemblyVersion>0.1.3.0</AssemblyVersion>
-    <FileVersion>0.1.3.0</FileVersion>
-    <InformationalVersion>0.1.3</InformationalVersion>
+    <Version>0.2.3</Version>
+    <AssemblyVersion>0.2.3.0</AssemblyVersion>
+    <FileVersion>0.2.3.0</FileVersion>
+    <InformationalVersion>0.2.3</InformationalVersion>
 
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishSingleFile>true</PublishSingleFile>
