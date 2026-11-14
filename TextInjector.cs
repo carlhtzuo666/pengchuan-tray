@@ -18,8 +18,15 @@ namespace PengchuanTray;
 internal static class TextInjector
 {
     private const uint INPUT_KEYBOARD = 1;
+    private const uint INPUT_MOUSE = 0;
     private const uint KEYEVENTF_KEYUP = 0x0002;
     private const uint KEYEVENTF_UNICODE = 0x0004;
+
+    // 鼠标事件标志（功能2：手机端触控板驱动电脑光标）
+    private const uint MOUSEEVENTF_MOVE = 0x0001;
+    private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+    private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+    private const uint MOUSEEVENTF_WHEEL = 0x0800;
 
     private const ushort VK_RETURN = 0x0D;
     private const ushort VK_LCONTROL = 0xA2;
@@ -50,10 +57,26 @@ internal static class TextInjector
     /// 这里显式声明大小，保证 INPUT 结构与系统 ABI 一致（4 + 4 对齐 + 32 = 40 字节），
     /// 否则 cbSize 不符会让 SendInput 直接返回 0 失败。
     /// </summary>
+    /// <summary>
+    /// 鼠标事件结构：dx/dy 为相对位移；dwFlags 决定是移动还是按键。
+    /// 三个 int 字段对应 Win32 MOUSEINPUT 的 dx/dy/mouseData，顺序与 ABI 一致。
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
     [StructLayout(LayoutKind.Explicit, Size = 32)]
     private struct INPUTUNION
     {
         [FieldOffset(0)] public KEYBDINPUT ki;
+        [FieldOffset(0)] public MOUSEINPUT mi;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -238,6 +261,62 @@ internal static class TextInjector
                     wVk = 0,
                     wScan = ch,
                     dwFlags = KEYEVENTF_UNICODE | (keyUp ? KEYEVENTF_KEYUP : 0),
+                    time = 0,
+                    dwExtraInfo = IntPtr.Zero
+                }
+            }
+        };
+    }
+
+    // ---------------- 鼠标注入（功能2：手机触控板驱动电脑光标） ----------------
+
+    /// <summary>
+    /// 相对移动光标：dx/dy 为像素增量，与笔记本触控板语义一致。
+    ///
+    /// 为什么用相对位移而不是绝对定位：手机触控板面积与电脑屏幕分辨率没有对应关系，
+    /// 绝对定位需要先知道屏幕尺寸（多显示器更复杂），且手机屏比例与电脑屏比例不一致会变形。
+    /// 相对位移对任何分辨率/多屏/缩放天然兼容。
+    /// </summary>
+    internal static bool MoveMouse(int dx, int dy)
+    {
+        if (dx == 0 && dy == 0)
+        {
+            return true;
+        }
+        return Send(MouseEvent(dx, dy, MOUSEEVENTF_MOVE, 0));
+    }
+
+    /// <summary>在光标当前位置单击左键（手机端双击触控板按钮触发）</summary>
+    internal static bool LeftClick()
+    {
+        return Send(
+            MouseEvent(0, 0, MOUSEEVENTF_LEFTDOWN, 0),
+            MouseEvent(0, 0, MOUSEEVENTF_LEFTUP, 0));
+    }
+
+    /// <summary>滚轮滚动（正数向上）。预留扩展，暂未接 UI</summary>
+    internal static bool ScrollWheel(int delta)
+    {
+        if (delta == 0)
+        {
+            return true;
+        }
+        return Send(MouseEvent(0, 0, MOUSEEVENTF_WHEEL, unchecked((uint)delta)));
+    }
+
+    private static INPUT MouseEvent(int dx, int dy, uint flags, uint mouseData)
+    {
+        return new INPUT
+        {
+            type = INPUT_MOUSE,
+            u = new INPUTUNION
+            {
+                mi = new MOUSEINPUT
+                {
+                    dx = dx,
+                    dy = dy,
+                    mouseData = mouseData,
+                    dwFlags = flags,
                     time = 0,
                     dwExtraInfo = IntPtr.Zero
                 }

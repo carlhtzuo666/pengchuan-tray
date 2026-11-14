@@ -17,7 +17,14 @@ public sealed record RemoteFile(string Name, string Url, long Size = 0, long Mti
 /// Id 单调递增，电脑端按 Id 去重，避免同一条反复写入剪贴板。
 /// Enter=true 表示手机端点了「发送」，电脑端送达文字后还要按一次回车。
 /// </summary>
-public sealed record RemoteClip(long Id, string Text, bool Enter, string Mode, bool FileDeliver, string[] FileNames);
+public sealed record RemoteClip(long Id, string Text, bool Enter, string Mode, bool FileDeliver, string[] FileNames, bool Realtime);
+
+/// <summary>
+/// 手机触控板下发的一次鼠标指令（手机端 <c>/api/mouse/latest</c> 返回）。
+/// dx/dy 是「自上次消费以来累积的位移」，不是单帧位移——手机端会合并未消费的拖拽事件，
+/// 电脑端每次消费都追平到手机当前手势位置，光标因此始终跟手。
+/// </summary>
+public sealed record RemoteMouse(string Kind, bool Active, int Dx, int Dy, int Clicks);
 
 /// <summary>
 /// 手机局域网服务客户端：只读发件箱 + 流式下载（带 Range 语义的服务端，这里先整文件流式拷贝）。
@@ -42,6 +49,43 @@ public sealed class PhoneClient : IDisposable
     /// 手机端在无新内容时返回 204 空响应，这里必须显式判空——
     /// 直接 JsonDocument.Parse 空串会抛异常，被轮询的空 catch 吞掉后完全看不到原因。
     /// </summary>
+    /// <summary>
+    /// 拉取一条待执行的鼠标指令。手机端无待执行指令时返回 204，这里对应返回 null。
+    /// 触控板激活期间电脑端会以 30ms 间隔调用本方法（见 TrayContext 的快轮询切换）。
+    /// </summary>
+    public async Task<RemoteMouse?> GetMouseCommandAsync(DiscoveredPhone phone, CancellationToken ct = default)
+    {
+        var url = $"http://{phone.Host}:{phone.Port}/api/mouse/latest?t={Uri.EscapeDataString(phone.Token)}";
+        // 与 GetLatestClipAsync 保持一致的读取方式（GetAsync + ReadAsStringAsync）：
+        // 这里刻意不用 HttpCompletionOption.ResponseHeadersRead —— 204 空响应下
+        // 提前释放会让手机端的连接状态机拿到半包，触发「请求解析失败」并在 30ms
+        // 快轮询里刷屏（真机踩过）。
+        using var response = await _http.GetAsync(url, ct);
+        if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+        {
+            return null;
+        }
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+        var json = await response.Content.ReadAsStringAsync(ct);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var kind = root.TryGetProperty("kind", out var k) && k.ValueKind == JsonValueKind.String
+            ? k.GetString() ?? string.Empty
+            : string.Empty;
+        var active = root.TryGetProperty("active", out var a) && a.ValueKind == JsonValueKind.True;
+        var dx = root.TryGetProperty("dx", out var x) && x.TryGetInt32(out var dxv) ? dxv : 0;
+        var dy = root.TryGetProperty("dy", out var y) && y.TryGetInt32(out var dyv) ? dyv : 0;
+        var clicks = root.TryGetProperty("clicks", out var c) && c.TryGetInt32(out var cv) ? cv : 0;
+        return new RemoteMouse(kind, active, dx, dy, clicks);
+    }
+
     public async Task<RemoteClip?> GetLatestClipAsync(DiscoveredPhone phone, long sinceId, CancellationToken ct = default)
     {
         var url = $"http://{phone.Host}:{phone.Port}/api/clip/latest"
@@ -80,7 +124,10 @@ public sealed class PhoneClient : IDisposable
                 }
             }
         }
-        return new RemoteClip(id, text, enter, mode, fileDeliver, names.ToArray());
+        // realtime=true：边打边传的打字中间态（允许正文为空，空=清空输入框）；
+        // 开关关闭时电脑端直接丢弃，绝不当普通发送处理
+        var realtime = root.TryGetProperty("realtime", out var rt) && rt.ValueKind == JsonValueKind.True;
+        return new RemoteClip(id, text, enter, mode, fileDeliver, names.ToArray(), realtime);
     }
 
     /// <summary>

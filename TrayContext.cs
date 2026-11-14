@@ -48,6 +48,8 @@ public sealed class TrayContext : ApplicationContext
     private const int NormalPollMs = 2000;
     /// <summary>实时同步输入开启时的轮询间隔（毫秒）</summary>
     private const int RealtimePollMs = 500;
+    /// <summary>触控板激活时的轮询间隔：拖拽要跟手，必须比实时同步更快</summary>
+    private const int MousePollMs = 30;
 
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _openLanItem;
@@ -82,6 +84,10 @@ public sealed class TrayContext : ApplicationContext
     private string? _clipToken;
     /** 轮询文字传输进行中标志：与文件下载互不阻塞（下载大文件可能耗时数分钟） */
     private bool _clipPolling;
+    /// <summary>触控板是否激活：激活时切 30ms 快轮询拉鼠标指令，退出后恢复原节奏</summary>
+    private bool _mouseActive;
+    /// <summary>鼠标指令拉取进行中标志：避免快轮询重入</summary>
+    private bool _mousePolling;
     /**
      * 实时同步模式下「电脑端当前已注入的文字」。
      * 每收到新内容时与它做差分：新增部分补键入、变短部分补退格，
@@ -180,6 +186,8 @@ public sealed class TrayContext : ApplicationContext
             _ = PollOutboxAsync();
             // 文字传输与文件下载独立：大文件下载可能耗时数分钟，不能饿死低延迟的文字接收。
             _ = PollClipAsync();
+            // 触控板激活时才轮询鼠标指令（未激活时这次调用立即返回，零开销）
+            _ = PollMouseAsync();
         };
         // 启动时按持久化的「实时同步输入」开关决定轮询节奏：
         // 开启则 500ms（打字要跟手），关闭则 2000ms（省电，点发送才传）。
@@ -470,6 +478,14 @@ public sealed class TrayContext : ApplicationContext
                 await _phone.AckClipAsync(phone, clip.Id);
                 return;
             }
+            // 实时帧在开关关闭（或本机设为仅剪贴板）时直接确认丢弃：
+            // 它是打字中间态而非用户点「发送」的消息，落入下方常规分支
+            // 会把每个中间态整段键入，越打越重复。手动发送帧（realtime=false）不受影响。
+            if (clip.Realtime)
+            {
+                await _phone.AckClipAsync(phone, clip.Id);
+                return;
+            }
             if (clip.Text.Length == 0)
             {
                 // 纯回车事件（手机「Enter」按钮）：不动剪贴板、不动输入框内容，只按一次回车
@@ -663,6 +679,72 @@ public sealed class TrayContext : ApplicationContext
         }
         _lastTypedText = text;
         Log($"实时同步 差分 prefix={prefix} del={toDelete} add={toAppend.Length} target=[{target}]");
+    }
+
+    /// <summary>
+    /// 拉取并执行手机触控板下发的鼠标指令。
+    ///
+    /// 只在触控板激活（_mouseActive）时才真正发请求：未激活时直接返回，
+    /// 因此「每 tick 调一次」不会带来额外网络开销。
+    /// 激活期间 _ticker 被切到 MousePollMs(30ms)，光标才能跟手；
+    /// 手机端退出触控板后指令里 active=false，本方法随即恢复原轮询节奏。
+    /// </summary>
+    private async Task PollMouseAsync()
+    {
+        if (_exiting || _mousePolling)
+        {
+            return;
+        }
+        var phone = _discovery.Current;
+        if (phone is null)
+        {
+            return;
+        }
+        // 说明：不能只在 _mouseActive 时才请求——那样「用户第一次打开触控板」
+        // 时电脑根本不知道，永远进不了快轮询（真机踩过）。
+        // 这里改为常态探测：未激活时用 30ms 间隔也仅在本方法内做一次轻量 GET，
+        // 手机端无指令会立刻回 204，开销可忽略；一旦收到 active=true 就切快轮询。
+        _mousePolling = true;
+        try
+        {
+            var cmd = await _phone.GetMouseCommandAsync(phone);
+            if (cmd is null)
+            {
+                return;
+            }
+            // 位移优先执行：先把光标移到位，再处理点击，避免「点在移动前的位置」
+            if (cmd.Dx != 0 || cmd.Dy != 0)
+            {
+                TextInjector.MoveMouse(cmd.Dx, cmd.Dy);
+            }
+            for (var i = 0; i < cmd.Clicks; i++)
+            {
+                TextInjector.LeftClick();
+            }
+            // 同步激活状态：手机端退出触控板时这里收到 false，恢复轮询节奏
+            if (cmd.Active != _mouseActive)
+            {
+                SetMouseActive(cmd.Active);
+            }
+        }
+        catch
+        {
+            // 拉取失败静默：手机可能刚切后台，下个 tick 重试
+        }
+        finally
+        {
+            _mousePolling = false;
+        }
+    }
+
+    /// <summary>切换触控板激活状态并调整轮询节奏（30ms ↔ 原设置）</summary>
+    private void SetMouseActive(bool active)
+    {
+        _mouseActive = active;
+        _ticker.Interval = active
+            ? MousePollMs
+            : (_settings.RealtimeSync ? RealtimePollMs : NormalPollMs);
+        Log($"触控板 -> {(active ? "激活" : "退出")} 轮询={_ticker.Interval}ms");
     }
 
     private void ToggleAutoClip()
